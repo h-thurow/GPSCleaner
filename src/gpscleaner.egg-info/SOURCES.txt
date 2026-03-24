@@ -1,0 +1,10 @@
+pyproject.toml
+src/gpscleaner/__init__.py
+src/gpscleaner/__main__.py
+src/gpscleaner/cli.py
+src/gpscleaner/gpscleaner.py
+src/gpscleaner.egg-info/PKG-INFO
+src/gpscleaner.egg-info/SOURCES.txt
+src/gpscleaner.egg-info/dependency_links.txt
+src/gpscleaner.egg-info/top_level.txt
+tests/test_gpscleaner.py
