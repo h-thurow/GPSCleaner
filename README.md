@@ -87,4 +87,4 @@ recording.gpx  →  recording_cleaned.gpx
                →  recording_cleaned.png
 ```
 
-![GPS Tracks](tests/fixtures/260322-recording_cleaned.png)
+![GPS Tracks](readme_resources/260322-recording_cleaned.png)
