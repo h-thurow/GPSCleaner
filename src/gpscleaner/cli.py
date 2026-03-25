@@ -4,7 +4,7 @@ from pathlib import Path
 
 import typer
 
-from src.gpscleaner.gpscleaner import GPSCleaner
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSSampleRateReducer
 
 app = typer.Typer(add_completion=False)
 
@@ -35,10 +35,15 @@ def _extract_coords(gpx_file: Path) -> tuple[list[float], list[float]]:
     return lats, lons
 
 
-def _plot_tracks(recording: Path, target: Path, cleaned: Path, output_png: Path) -> None:
+def _plot_tracks(
+    recording: Path,
+    target: Path | None,
+    cleaned: Path,
+    output_png: Path,
+) -> None:
     """
-    Plot the original recording, target route, and cleaned recording on a single
-    map and save the result as a PNG file.
+    Plot the original recording, optionally a target route, and the cleaned
+    recording on a single map and save the result as a PNG file.
     """
     import matplotlib.pyplot as plt
 
@@ -51,7 +56,7 @@ def _plot_tracks(recording: Path, target: Path, cleaned: Path, output_png: Path)
     ]
 
     for gpx_file, color, label, linewidth, markersize in tracks:
-        if not gpx_file.exists():
+        if gpx_file is None or not gpx_file.exists():
             continue
         lats, lons = _extract_coords(gpx_file)
         ax.plot(lons, lats, color=color, linewidth=linewidth, label=label)
@@ -72,49 +77,82 @@ def _plot_tracks(recording: Path, target: Path, cleaned: Path, output_png: Path)
 
 @app.command()
 def main(
-    start: str = typer.Option(
-        ...,
-        help="Start of the deviation window (UTC), e.g. 2026-03-22T13:10:00Z",
-    ),
-    end: str = typer.Option(
-        ...,
-        help="End of the deviation window (UTC), e.g. 2026-03-22T13:20:00Z",
-    ),
     orig: Path = typer.Option(
         ...,
         exists=True,
-        help="Path to the GPX recording that contains the deviations",
+        help="Path to the GPX recording",
     ),
-    reference: Path = typer.Option(
-        ...,
+    start: str | None = typer.Option(
+        None,
+        help="Start of the deviation window (UTC), e.g. 2026-03-22T13:10:00Z",
+    ),
+    end: str | None = typer.Option(
+        None,
+        help="End of the deviation window (UTC), e.g. 2026-03-22T13:20:00Z",
+    ),
+    reference: Path | None = typer.Option(
+        None,
         exists=True,
         help="Path to the GPX file with the actual route",
+    ),
+    sample_rate: float | None = typer.Option(
+        None,
+        "--sample-rate",
+        help="Reduce track to this many positions per second (e.g. 0.2 for one every 5 s)",
     ),
     plot: bool = typer.Option(
         False,
         "--plot",
-        help="Save a PNG plot of the original, target, and cleaned tracks",
+        help="Save a PNG plot of the tracks",
     ),
 ) -> None:
     """
     Clean a GPS recording by replacing deviating track points with positions
-    from a reference route.
+    from a reference route, or reduce the recording's sample sample_rate.
     """
-    start_time = _parse_datetime(start, "start")
-    end_time = _parse_datetime(end, "end")
+    if sample_rate is not None:
+        if start is not None or end is not None or reference is not None:
+            typer.echo(
+                "Error: --start, --end, and --reference cannot be used with --sample-rate.\n"
+                "       When using --sample-rate, only --orig and --plot are allowed.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
 
-    cleaner = GPSCleaner(
-        start_time=start_time,
-        end_time=end_time,
-        recording=orig,
-        target=reference,
-    )
-    cleaner.start()
+        GPSSampleRateReducer(orig, sample_rate).start()
 
-    if plot:
-        cleaned = orig.parent / (orig.stem + "_cleaned" + orig.suffix)
-        output_png = orig.parent / (orig.stem + "_cleaned.png")
-        _plot_tracks(orig, reference, cleaned, output_png)
+        if plot:
+            cleaned = orig.parent / (orig.stem + "_cleaned" + orig.suffix)
+            output_png = orig.parent / (orig.stem + "_cleaned.png")
+            _plot_tracks(orig, None, cleaned, output_png)
+
+    else:
+        missing = [
+            name for name, val in [("--start", start), ("--end", end), ("--reference", reference)]
+            if val is None
+        ]
+        if missing:
+            typer.echo(
+                f"Error: {', '.join(missing)} {'is' if len(missing) == 1 else 'are'} required "
+                f"when --sample-rate is not used.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        start_time = _parse_datetime(start, "start")
+        end_time = _parse_datetime(end, "end")
+
+        GPSCleaner(
+            start_time=start_time,
+            end_time=end_time,
+            recording=orig,
+            target=reference,
+        ).start()
+
+        if plot:
+            cleaned = orig.parent / (orig.stem + "_cleaned" + orig.suffix)
+            output_png = orig.parent / (orig.stem + "_cleaned.png")
+            _plot_tracks(orig, reference, cleaned, output_png)
 
 
 if __name__ == "__main__":

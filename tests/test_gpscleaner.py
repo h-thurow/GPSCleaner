@@ -3,22 +3,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
-from src.gpscleaner.gpscleaner import GPSCleaner, _interpolate_positions
+from src.gpscleaner.cli import app
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSSampleRateReducer, _interpolate_positions
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 RECORDING = FIXTURES_DIR / "260322-recording.GPX"
 OUTPUT = FIXTURES_DIR / "260322-recording_cleaned.GPX"
-# RECORDING = FIXTURES_DIR / "260322-recording-garmin.connect-export.gpx"
-# OUTPUT = FIXTURES_DIR / "260322-recording-garmin.connect-export_cleaned.gpx"
 
 TARGET = FIXTURES_DIR / "260322-reference.GPX"
+
+CAM_RECORDING = FIXTURES_DIR / "1_CAM_20260103124845_0011_D.gpx"
+CAM_OUTPUT = FIXTURES_DIR / "1_CAM_20260103124845_0011_D_cleaned.gpx"
 
 START_TIME_UTC = datetime(2026, 3, 22, 15, 6, 8, tzinfo=timezone.utc)
 END_TIME_UTC = datetime(2026, 3, 22, 15, 30, 50, tzinfo=timezone.utc)
 
 GPX_NS = "http://www.topografix.com/GPX/1/1"
+
+runner = CliRunner()
 
 
 @pytest.fixture(autouse=True)
@@ -94,6 +99,68 @@ class TestGPSCleaner:
                 continue  # skip points inside the window
             assert orig.attrib["lat"] == cleaned.attrib["lat"]
             assert orig.attrib["lon"] == cleaned.attrib["lon"]
+
+
+class TestGPSSampleRateReducer:
+
+    @pytest.fixture(autouse=True)
+    def cleanup_cam_output(self):
+        """Remove the CAM output file before each test."""
+        if CAM_OUTPUT.exists():
+            CAM_OUTPUT.unlink()
+        yield
+
+    def test_output_file_is_created(self):
+        # 1_CAM has ~25 positions/second; reduce to 1/s
+        GPSSampleRateReducer(CAM_RECORDING, 1.0).start()
+        assert CAM_OUTPUT.exists()
+
+    def test_original_file_is_not_modified(self):
+        original_content = CAM_RECORDING.read_bytes()
+        GPSSampleRateReducer(CAM_RECORDING, 1.0).start()
+        assert CAM_RECORDING.read_bytes() == original_content
+
+    def test_trackpoint_count_is_reduced(self):
+        # 1_CAM has ~25 positions/second; reducing to 1/s should keep roughly 1/25
+        original_count = count_trackpoints(CAM_RECORDING)
+        GPSSampleRateReducer(CAM_RECORDING, 1.0).start()
+        reduced_count = count_trackpoints(CAM_OUTPUT)
+        assert reduced_count < original_count
+        assert reduced_count < original_count / 10
+
+    def test_hint_when_sample_rate_cannot_be_reduced(self, capsys):
+        # 260322-recording.GPX has ~1 position/second; requesting 2/s is impossible
+        GPSSampleRateReducer(RECORDING, 2.0).start()
+        captured = capsys.readouterr()
+        assert "Cannot reduce" in captured.out
+        assert not OUTPUT.exists()
+
+    def test_sample_rate_with_start_raises_error(self):
+        result = runner.invoke(app, [
+            "--orig", str(CAM_RECORDING),
+            "--sample-rate", "1",
+            "--start", "2026-01-03T11:48:46Z",
+        ])
+        assert result.exit_code != 0
+        assert "--sample-rate" in result.output
+
+    def test_sample_rate_with_end_raises_error(self):
+        result = runner.invoke(app, [
+            "--orig", str(CAM_RECORDING),
+            "--sample-rate", "1",
+            "--end", "2026-01-03T12:00:00Z",
+        ])
+        assert result.exit_code != 0
+        assert "--sample-rate" in result.output
+
+    def test_sample_rate_with_reference_raises_error(self):
+        result = runner.invoke(app, [
+            "--orig", str(CAM_RECORDING),
+            "--sample-rate", "1",
+            "--reference", str(TARGET),
+        ])
+        assert result.exit_code != 0
+        assert "--sample-rate" in result.output
 
 
 class TestInterpolatePositions:

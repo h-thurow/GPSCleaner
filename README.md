@@ -39,52 +39,63 @@ pip install -e .
 
 ## Usage
 
+### Correct a deviated track
+
 ```
-python -m gpscleaner --start TIME --end TIME --orig FILE --reference FILE [--plot]
+python -m gpscleaner --orig FILE --start TIME --end TIME --reference FILE [--plot]
 ```
 
 | Option        | Description |
 |---------------|-------------|
-| `--start`     | Time when the recording begins to deviate from the actual route (UTC, ISO 8601) |
-| `--end`       | Time when the recording returns to the actual route (UTC, ISO 8601) |
 | `--orig`      | GPX file containing the recording with deviations |
+| `--start`     | Time when the recording begins to deviate (UTC, ISO 8601) |
+| `--end`       | Time when the recording returns to the actual route (UTC, ISO 8601) |
 | `--reference` | GPX file containing the actual route for the given time window |
 | `--plot`      | Also save a PNG visualisation of the tracks (optional) |
 
 Times must be given in UTC. Garmin BaseCamp displays times in local time — please convert accordingly.
 
-### Example
-
 ```bash
 python -m gpscleaner \
+  --orig  /path/to/recording.gpx \
   --start 2026-03-22T15:06:08Z \
   --end   2026-03-22T15:30:50Z \
-  --orig  /path/to/recording.gpx \
   --reference /path/to/reference.gpx
 ```
 
-The cleaned file is saved in the same directory as `--orig`, with the suffix `_cleaned`:
+### Reduce sample rate
+
+Some GPS devices (e.g. dashcams) record at a very high sample rate. Use `--sample-rate` to reduce the number of positions per second:
+
+```
+python -m gpscleaner --orig FILE --sample-rate RATE [--plot]
+```
+
+| Option      | Description |
+|-------------|-------------|
+| `--orig`    | GPX file to be reduced |
+| `--sample-rate` | Target number of positions per second (decimals allowed, e.g. `0.2` for one position every 5 seconds) |
+| `--plot`    | Also save a PNG visualisation of the tracks (optional) |
+
+`--sample-rate` cannot be combined with `--start`, `--end`, or `--reference`.
+
+```bash
+python -m gpscleaner --orig /path/to/recording.gpx --sample-rate 1
+```
+
+If the recording's current sample rate is already at or below the target, a message is printed and no output file is created.
+
+### Output files
+
+Both modes write the result next to `--orig` with the suffix `_cleaned`:
 
 ```
 recording.gpx  →  recording_cleaned.gpx
+               →  recording_cleaned.png  (with --plot)
 ```
 
 ## Plot
 
-With `--plot`, an additional PNG file is created showing the original recording (blue), reference route (green), and cleaned track (red) overlaid:
-
-```bash
-python -m gpscleaner \
-  --start 2026-03-22T15:06:08Z \
-  --end   2026-03-22T15:30:50Z \
-  --orig  /path/to/recording.gpx \
-  --reference /path/to/reference.gpx \
-  --plot
-```
-
-```
-recording.gpx  →  recording_cleaned.gpx
-               →  recording_cleaned.png
-```
+With `--plot`, an additional PNG file is created. For track correction it shows the original recording (blue), reference route (green), and cleaned track (red). For sample rate reduction it shows the original (blue) and the reduced track (red).
 
 ![GPS Tracks](readme_resources/260322-recording_cleaned.png)

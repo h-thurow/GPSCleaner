@@ -1,6 +1,6 @@
 import math
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 # The XML namespace used in GPX 1.1 files
@@ -197,4 +197,101 @@ class GPSCleaner:
         recording_tree.write(output_path, xml_declaration=True, encoding="utf-8")
 
         print(f"Done. {len(affected_elements)} track points replaced.")
+        print(f"Output written to: {output_path}")
+
+
+class GPSSampleRateReducer:
+    """
+    Reduces the number of track points in a GPS recording to a target sample rate
+    (positions per second). Points are removed by keeping only those that are
+    at least 1/target_sample_rate seconds apart from the previously kept point.
+
+    Usage:
+        reducer = GPSSampleRateReducer(recording, sample_rate)
+        reducer.start()
+    """
+
+    def __init__(self, recording: Path, target_sample_rate: float) -> None:
+        """
+        Parameters
+        ----------
+        recording : Path
+            Path to the GPX file whose sample rate should be reduced.
+        target_sample_rate : float
+            Target number of positions per second. Must be less than the current
+            sample rate of the recording; otherwise a hint is printed and no output
+            file is created.
+        """
+        self._recording = recording
+        self._target_sample_rate = target_sample_rate
+
+    def start(self) -> None:
+        """
+        Run the density reduction:
+        1. Parse the recording GPX.
+        2. Calculate the current sample rate.
+        3. If target sample rate >= current sample rate, print a hint and return.
+        4. Keep only track points that are at least 1/target_sample_rate seconds apart.
+        5. Write the reduced track to a new file next to the original.
+        """
+        ET.register_namespace("", GPX_NAMESPACE)
+
+        recording_tree = ET.parse(self._recording)
+        recording_root = recording_tree.getroot()
+
+        # Collect all track points that have a <time> element
+        all_trkpts: list[tuple[ET.Element, datetime]] = []
+        for trkpt in recording_root.iter(f"{{{GPX_NAMESPACE}}}trkpt"):
+            time_element = trkpt.find(f"{{{GPX_NAMESPACE}}}time")
+            if time_element is None or time_element.text is None:
+                continue
+            point_time = datetime.fromisoformat(
+                time_element.text.replace("Z", "+00:00")
+            )
+            all_trkpts.append((trkpt, point_time))
+
+        if len(all_trkpts) < 2:
+            print("Not enough track points with timestamps to calculate sample rate.")
+            return
+
+        total_duration = (all_trkpts[-1][1] - all_trkpts[0][1]).total_seconds()
+        if total_duration <= 0:
+            print("Cannot calculate sample rate: all track points have the same timestamp.")
+            return
+
+        current_sample_rate = (len(all_trkpts) - 1) / total_duration
+
+        if self._target_sample_rate >= current_sample_rate:
+            print(
+                f"Cannot reduce: recording sample rate is {current_sample_rate:.4f} positions/second."
+            )
+            return
+
+        # Keep the first point in each time bucket of width 1/target_sample_rate.
+        # Buckets are measured from the recording's first timestamp, so drift is
+        # bounded by at most one sample period regardless of recording length.
+        min_interval = 1.0 / self._target_sample_rate
+        start_time = all_trkpts[0][1]
+        kept_trkpts: list[ET.Element] = []
+        last_bucket = -1
+
+        for trkpt, point_time in all_trkpts:
+            bucket = int((point_time - start_time).total_seconds() / min_interval)
+            if bucket > last_bucket:
+                kept_trkpts.append(trkpt)
+                last_bucket = bucket
+
+        # Remove all track points not in the kept set from their parent <trkseg>
+        kept_ids = {id(trkpt) for trkpt in kept_trkpts}
+        for trkseg in recording_root.iter(f"{{{GPX_NAMESPACE}}}trkseg"):
+            for trkpt in list(trkseg):
+                if trkpt.tag == f"{{{GPX_NAMESPACE}}}trkpt" and id(trkpt) not in kept_ids:
+                    trkseg.remove(trkpt)
+
+        output_path = self._recording.parent / (
+            self._recording.stem + "_cleaned" + self._recording.suffix
+        )
+        recording_tree.write(output_path, xml_declaration=True, encoding="utf-8")
+
+        print(f"Done. {len(all_trkpts)} track points reduced to {len(kept_trkpts)}.")
         print(f"Output written to: {output_path}")
