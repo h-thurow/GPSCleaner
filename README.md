@@ -8,7 +8,7 @@ The highlighted section of the GPS track is intended to follow the actual route,
 
 ![](readme_resources/recording.png)
 
-In Garmin BaseCamp, for example, set the start and end times for the deviations:
+Determine the start and end times of the highlighted section. Here in Garmin BaseCamp:
 
 ![](readme_resources/start_time.png)
 ![](readme_resources/end_time.png)
