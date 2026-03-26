@@ -69,7 +69,7 @@ python -m gpscleaner \
 
 #### By track point index
 
-For high sample-rate recordings (e.g. dashcams at 25 fps), Garmin BaseCamp shows timestamps only to the nearest second, which is too imprecise. Use track point indices instead:
+For high sample-rate recordings (e.g. dashcams at 25 fps), In the "Get Info" window in Garmin BaseCamp, timestamps are only displayed to the nearest second, which is too imprecise. Use track point indices instead:
 
 ```
 python -m gpscleaner --orig FILE --start-point N --end-point N --reference FILE [--plot]
