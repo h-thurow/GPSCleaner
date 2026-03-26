@@ -61,7 +61,7 @@ Alternatively, without activating the environment:
 
 ### Correct a deviated track
 
-The deviation window can be specified either by **timestamps** or by **track point indices**.
+The deviation window can be specified by **timestamps**, **track point indices** and **GPS coordinates**.
 
 #### By timestamp
 
