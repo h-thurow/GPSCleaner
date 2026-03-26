@@ -6,7 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from src.gpscleaner.cli import app
-from src.gpscleaner.gpscleaner import GPSCleaner, GPSSampleRateReducer, _get_timestamp_by_coord, _get_timestamp_by_index, _interpolate_positions
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSSampleRateReducer, _get_timestamp_by_coord, _get_timestamp_by_index, _interpolate_positions
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -271,6 +271,100 @@ class TestGPSCleanerByIndex:
             _get_timestamp_by_index(CAM_RECORDING, 0)
         with pytest.raises(ValueError):
             _get_timestamp_by_index(CAM_RECORDING, 999999)
+
+
+class TestGPSDistanceReducer:
+
+    @pytest.fixture(autouse=True)
+    def cleanup_distance_output(self):
+        """Remove distance-reduced output files before each test."""
+        for f in FIXTURES_DIR.glob("*_distance=*.gpx"):
+            f.unlink()
+        for f in FIXTURES_DIR.glob("*_distance=*.GPX"):
+            f.unlink()
+        yield
+
+    def cam_distance_output(self, distance: float) -> Path:
+        return FIXTURES_DIR / f"1_CAM_20260103124845_0011_D_distance={distance}.gpx"
+
+    def recording_distance_output(self, distance: float) -> Path:
+        return FIXTURES_DIR / f"260322-recording_distance={distance}.GPX"
+
+    def test_output_file_is_created(self):
+        # CAM has avg ~0.05 m between points; threshold 1 m causes large reduction
+        GPSDistanceReducer(CAM_RECORDING, 1.0).start()
+        assert self.cam_distance_output(1.0).exists()
+
+    def test_original_file_is_not_modified(self):
+        original_content = CAM_RECORDING.read_bytes()
+        GPSDistanceReducer(CAM_RECORDING, 1.0).start()
+        assert CAM_RECORDING.read_bytes() == original_content
+
+    def test_trackpoint_count_is_reduced_cam(self):
+        original_count = count_trackpoints(CAM_RECORDING)
+        GPSDistanceReducer(CAM_RECORDING, 1.0).start()
+        assert count_trackpoints(self.cam_distance_output(1.0)) < original_count / 5
+
+    def test_trackpoint_count_is_reduced_recording(self):
+        # 260322 has avg ~1.27 m between points; threshold 3 m reduces count
+        original_count = count_trackpoints(RECORDING)
+        GPSDistanceReducer(RECORDING, 3.0).start()
+        assert count_trackpoints(self.recording_distance_output(3.0)) < original_count
+
+    def test_nothing_to_do_when_gaps_already_large_enough(self, capsys, tmp_path):
+        # Three points ~10 m apart — all gaps well above the 3 m threshold
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><trkseg>"
+            '<trkpt lat="47.000000" lon="9.000000"/>'
+            '<trkpt lat="47.000090" lon="9.000000"/>'
+            '<trkpt lat="47.000180" lon="9.000000"/>'
+            "</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "sparse.gpx"
+        gpx_file.write_text(gpx)
+        GPSDistanceReducer(gpx_file, 3.0).start()
+        captured = capsys.readouterr()
+        assert "Nothing to do" in captured.out
+        assert not (tmp_path / "sparse_distance=3.0.gpx").exists()
+
+    def test_distance_with_start_raises_error(self):
+        result = runner.invoke(app, [
+            "--orig", str(CAM_RECORDING),
+            "--distance", "1",
+            "--start", "2026-01-03T11:48:46Z",
+        ])
+        assert result.exit_code != 0
+        assert "--distance" in result.output
+
+    def test_distance_with_sample_rate_raises_error(self):
+        result = runner.invoke(app, [
+            "--orig", str(CAM_RECORDING),
+            "--distance", "1",
+            "--sample-rate", "1",
+        ])
+        assert result.exit_code != 0
+        assert "--distance" in result.output
+
+    def test_distance_with_reference_raises_error(self):
+        result = runner.invoke(app, [
+            "--orig", str(CAM_RECORDING),
+            "--distance", "1",
+            "--reference", str(TARGET),
+        ])
+        assert result.exit_code != 0
+        assert "--distance" in result.output
+
+    def test_distance_with_start_coord_raises_error(self):
+        result = runner.invoke(app, [
+            "--orig", str(CAM_RECORDING),
+            "--distance", "1",
+            "--start-coord", "45.0,9.0",
+            "--end-coord", "45.1,9.1",
+        ])
+        assert result.exit_code != 0
+        assert "--distance" in result.output
 
 
 class TestGPSCleanerByCoord:

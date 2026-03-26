@@ -4,7 +4,7 @@ from pathlib import Path
 
 import typer
 
-from src.gpscleaner.gpscleaner import GPSCleaner, GPSSampleRateReducer, _get_timestamp_by_coord, _get_timestamp_by_index
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSSampleRateReducer, _get_timestamp_by_coord, _get_timestamp_by_index
 
 app = typer.Typer(add_completion=False)
 
@@ -135,6 +135,11 @@ def main(
         "--sample-rate",
         help="Reduce track to this many positions per second (e.g. 0.2 for one every 5 s)",
     ),
+    distance: float | None = typer.Option(
+        None,
+        "--distance",
+        help="Reduce track so consecutive points are at least this many metres apart",
+    ),
     plot: bool = typer.Option(
         False,
         "--plot",
@@ -149,7 +154,25 @@ def main(
     using_index = start_point is not None or end_point is not None
     using_time  = start       is not None or end       is not None
 
-    if sample_rate is not None:
+    if distance is not None:
+        if using_time or using_index or using_coord or reference is not None or sample_rate is not None:
+            typer.echo(
+                "Error: --start, --end, --start-point, --end-point, --start-coord, --end-coord, "
+                "--reference, and --sample-rate cannot be used with --distance.\n"
+                "       When using --distance, only --orig and --plot are allowed.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        GPSDistanceReducer(orig, distance).start()
+
+        if plot:
+            cleaned = orig.parent / (orig.stem + f"_distance={distance}" + orig.suffix)
+            if cleaned.exists():
+                output_png = orig.parent / (orig.stem + f"_distance={distance}.png")
+                _plot_tracks(orig, None, cleaned, output_png)
+
+    elif sample_rate is not None:
         if using_time or using_index or using_coord or reference is not None:
             typer.echo(
                 "Error: --start, --end, --start-point, --end-point, and --reference "

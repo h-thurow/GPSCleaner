@@ -163,13 +163,37 @@ python -m gpscleaner --orig /path/to/recording.gpx --sample-rate 1
 
 If the recording's current sample rate is already at or below the target, a message is printed and no output file is created.
 
-### Output files
+### Reduce point density by distance
 
-Both modes write the result next to `--orig` with the suffix `_cleaned`:
+Use `--distance` to remove points so that consecutive kept points are at least a given distance apart:
 
 ```
-recording.gpx  →  recording_cleaned.gpx
-               →  recording_cleaned.png  (with --plot)
+python -m gpscleaner --orig FILE --distance METRES [--plot]
+```
+
+| Option       | Description |
+|--------------|-------------|
+| `--orig`     | GPX file to be reduced |
+| `--distance` | Minimum distance in metres between consecutive points (decimals allowed, e.g. `2.5`) |
+| `--plot`     | Also save a PNG visualisation of the tracks (optional) |
+
+```bash
+python -m gpscleaner --orig /path/to/recording.gpx --distance 3
+```
+
+A point is removed only if the next point (after removal) would still be within the threshold distance of the current anchor, so no gap exceeds the threshold. Points are never added; sections already sparser than the threshold remain unchanged. If no points can be removed, a message is printed and no output file is created.
+
+`--distance` cannot be combined with `--start`, `--end`, `--start-point`, `--end-point`, `--start-coord`, `--end-coord`, `--reference`, or `--sample-rate`.
+
+### Output files
+
+All modes write the result next to `--orig`:
+
+```
+recording.gpx  →  recording_cleaned.gpx              (track correction)
+               →  recording_cleaned.png               (with --plot)
+               →  recording_sample-rate=1.0.gpx       (--sample-rate 1)
+               →  recording_distance=3.0.gpx          (--distance 3)
 ```
 
 ## Plot

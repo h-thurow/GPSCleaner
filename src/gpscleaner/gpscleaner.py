@@ -267,6 +267,127 @@ class GPSCleaner:
         print(f"Output written to: {output_path}")
 
 
+class GPSDistanceReducer:
+    """
+    Reduces the number of track points in a GPS recording so that consecutive
+    kept points are at least min_distance metres apart.
+
+    A point is removed only if the next point (after removal) would still be
+    within min_distance of the current anchor, so no gap exceeds the threshold.
+    Points are never added. Sections already sparser than min_distance are
+    left unchanged.
+
+    Usage:
+        reducer = GPSDistanceReducer(recording, min_distance)
+        reducer.start()
+    """
+
+    def __init__(self, recording: Path, min_distance: float) -> None:
+        """
+        Parameters
+        ----------
+        recording : Path
+            Path to the GPX file whose point density should be reduced.
+        min_distance : float
+            Minimum distance in metres between consecutive kept points.
+        """
+        self._recording = recording
+        self._min_distance = min_distance
+
+    def start(self) -> None:
+        """
+        Run the distance-based reduction:
+        1. Parse the recording GPX.
+        2. Apply the min-distance algorithm to determine which points to keep.
+        3. If no points are removed, print a message and return without writing.
+        4. Otherwise remove the unneeded points and write a new file.
+        """
+        ET.register_namespace("", GPX_NAMESPACE)
+
+        recording_tree = ET.parse(self._recording)
+        recording_root = recording_tree.getroot()
+
+        all_trkpts: list[ET.Element] = list(
+            recording_root.iter(f"{{{GPX_NAMESPACE}}}trkpt")
+        )
+
+        if len(all_trkpts) < 2:
+            print("Not enough track points to reduce.")
+            return
+
+        kept = self._reduce(all_trkpts)
+
+        if len(kept) == len(all_trkpts):
+            print(
+                f"Nothing to do: no consecutive points are closer than "
+                f"{self._min_distance} m."
+            )
+            return
+
+        kept_ids = {id(pt) for pt in kept}
+        for trkseg in recording_root.iter(f"{{{GPX_NAMESPACE}}}trkseg"):
+            for trkpt in list(trkseg):
+                if trkpt.tag == f"{{{GPX_NAMESPACE}}}trkpt" and id(trkpt) not in kept_ids:
+                    trkseg.remove(trkpt)
+
+        output_path = self._recording.parent / (
+            self._recording.stem + f"_distance={self._min_distance}" + self._recording.suffix
+        )
+        recording_tree.write(output_path, xml_declaration=True, encoding="utf-8")
+
+        print(f"Done. {len(all_trkpts)} track points reduced to {len(kept)}.")
+        print(f"Output written to: {output_path}")
+
+    def _reduce(self, all_trkpts: list[ET.Element]) -> list[ET.Element]:
+        """
+        Return the list of track points to keep, applying the min-distance rule.
+        The first and last points are always kept.
+        """
+        kept = [all_trkpts[0]]
+        i = 1
+        while i < len(all_trkpts):
+            anchor = kept[-1]
+            anchor_lat = float(anchor.attrib["lat"])
+            anchor_lon = float(anchor.attrib["lon"])
+
+            while i < len(all_trkpts):
+                curr = all_trkpts[i]
+                curr_lat = float(curr.attrib["lat"])
+                curr_lon = float(curr.attrib["lon"])
+                dist_to_curr = _haversine_distance(
+                    anchor_lat, anchor_lon, curr_lat, curr_lon
+                )
+
+                if dist_to_curr >= self._min_distance:
+                    # Far enough — keep and make new anchor
+                    kept.append(curr)
+                    i += 1
+                    break
+
+                # Too close — remove curr only if the point after it is also
+                # within min_distance of the anchor (look-ahead guard)
+                if i + 1 < len(all_trkpts):
+                    nxt = all_trkpts[i + 1]
+                    dist_to_next = _haversine_distance(
+                        anchor_lat, anchor_lon,
+                        float(nxt.attrib["lat"]), float(nxt.attrib["lon"]),
+                    )
+                    if dist_to_next <= self._min_distance:
+                        i += 1  # skip curr
+                    else:
+                        # Removing curr would leave a gap > min_distance — keep it
+                        kept.append(curr)
+                        i += 1
+                        break
+                else:
+                    # curr is the last point — always keep it
+                    kept.append(curr)
+                    i += 1
+                    break
+
+        return kept
+
+
 class GPSSampleRateReducer:
     """
     Reduces the number of track points in a GPS recording to a target sample rate
