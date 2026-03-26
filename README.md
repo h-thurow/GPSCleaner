@@ -31,10 +31,30 @@ Both GPS files must be in **GPX 1.1** format (`xmlns="http://www.topografix.com/
 
 ## Installation
 
+In the project directory:
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
+```
+
+## Starting GPSCleaner
+
+GPSCleaner runs inside a Python virtual environment (`.venv`). The environment must be activated once per terminal session before any `python -m gpscleaner` command will work:
+
+```bash
+source /path/to/GPSCleaner/.venv/bin/activate
+```
+
+You do not need to change into the project directory first — the full path to `activate` is enough. After activation, `python -m gpscleaner` works from any directory as long as you provide full paths to your GPX files.
+
+The activation applies only to the current terminal session. Open a new terminal window and you need to run `source … activate` again.
+
+Alternatively, without activating the environment:
+
+```bash
+/path/to/GPSCleaner/.venv/bin/python -m gpscleaner --orig ...
 ```
 
 ## Usage
