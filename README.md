@@ -117,7 +117,7 @@ python -m gpscleaner \
   --reference /path/to/reference.gpx
 ```
 
-Coordinates must match a track point in `--orig` exactly. JOSM displays coordinates in the format `45.9245652, 9.3406072` — remove the space after the comma to get `45.9245652,9.3406072`. The coordinate must be unique within the track; if it occurs more than once (e.g. a looping route), an error is raised.
+Coordinates must match a track point in `--orig` exactly. In JOSM's "Advanced object info" window coordinates are displayed in the format `45.9245652, 9.3406072` — remove the space after the comma to get `45.9245652,9.3406072`. The coordinate must be unique within the track; if it occurs more than once (e.g. a looping route), an error is raised.
 
 `--start-coord`/`--end-coord` cannot be combined with `--start`/`--end` or `--start-point`/`--end-point`.
 
