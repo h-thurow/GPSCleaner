@@ -4,11 +4,26 @@ from pathlib import Path
 
 import typer
 
-from src.gpscleaner.gpscleaner import GPSCleaner, GPSSampleRateReducer, _get_timestamp_by_index
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSSampleRateReducer, _get_timestamp_by_coord, _get_timestamp_by_index
 
 app = typer.Typer(add_completion=False)
 
 GPX_NAMESPACE = "http://www.topografix.com/GPX/1/1"
+
+
+def _parse_coord(value: str, option_name: str) -> tuple[float, float]:
+    """
+    Parse a coordinate string in the format 'LAT,LON' (no spaces).
+    Raises a Typer error with a clear message if the format is invalid.
+    """
+    try:
+        lat_str, lon_str = value.split(",")
+        return float(lat_str.strip()), float(lon_str.strip())
+    except ValueError:
+        raise typer.BadParameter(
+            f"'{value}' is not a valid coordinate. Expected format: 47.7936893,13.0076771",
+            param_hint=f"'--{option_name}'",
+        )
 
 
 def _parse_datetime(value: str, option_name: str) -> datetime:
@@ -100,6 +115,16 @@ def main(
         "--end-point",
         help="Index of the last deviating track point (1 = first point in the recording)",
     ),
+    start_coord: str | None = typer.Option(
+        None,
+        "--start-coord",
+        help="Coordinate of the first deviating point, e.g. 47.7936893,13.0076771",
+    ),
+    end_coord: str | None = typer.Option(
+        None,
+        "--end-coord",
+        help="Coordinate of the last deviating point, e.g. 47.5432100,13.1234567",
+    ),
     reference: Path | None = typer.Option(
         None,
         exists=True,
@@ -120,11 +145,12 @@ def main(
     Clean a GPS recording by replacing deviating track points with positions
     from a reference route, or reduce the recording's sample rate.
     """
+    using_coord = start_coord is not None or end_coord is not None
     using_index = start_point is not None or end_point is not None
     using_time  = start       is not None or end       is not None
 
     if sample_rate is not None:
-        if using_time or using_index or reference is not None:
+        if using_time or using_index or using_coord or reference is not None:
             typer.echo(
                 "Error: --start, --end, --start-point, --end-point, and --reference "
                 "cannot be used with --sample-rate.\n"
@@ -139,6 +165,55 @@ def main(
             cleaned = orig.parent / (orig.stem + f"_sample-rate={sample_rate}" + orig.suffix)
             output_png = orig.parent / (orig.stem + f"_sample-rate={sample_rate}.png")
             _plot_tracks(orig, None, cleaned, output_png)
+
+    elif using_coord:
+        if using_time or using_index:
+            typer.echo(
+                "Error: --start and --end and --start-point and --end-point cannot be used "
+                "together with --start-coord and --end-coord.\n"
+                "       Use only one mode: time-based, index-based, or coordinate-based.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        if start_coord is None or end_coord is None:
+            missing = []
+            if start_coord is None:
+                missing.append("--start-coord")
+            if end_coord is None:
+                missing.append("--end-coord")
+            typer.echo(
+                f"Error: {', '.join(missing)} {'is' if len(missing) == 1 else 'are'} required "
+                f"when using coordinate-based mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        if reference is None:
+            typer.echo("Error: --reference is required.", err=True)
+            raise typer.Exit(code=1)
+
+        sc_lat, sc_lon = _parse_coord(start_coord, "start-coord")
+        ec_lat, ec_lon = _parse_coord(end_coord, "end-coord")
+
+        try:
+            start_time = _get_timestamp_by_coord(orig, sc_lat, sc_lon)
+            end_time   = _get_timestamp_by_coord(orig, ec_lat, ec_lon)
+        except ValueError as error:
+            typer.echo(f"Error: {error}", err=True)
+            raise typer.Exit(code=1)
+
+        GPSCleaner(
+            start_time=start_time,
+            end_time=end_time,
+            recording=orig,
+            target=reference,
+        ).start()
+
+        if plot:
+            cleaned = orig.parent / (orig.stem + "_cleaned" + orig.suffix)
+            output_png = orig.parent / (orig.stem + "_cleaned.png")
+            _plot_tracks(orig, reference, cleaned, output_png)
 
     elif using_index:
         if using_time:

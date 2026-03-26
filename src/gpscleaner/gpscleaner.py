@@ -133,6 +133,38 @@ def _get_timestamp_by_index(recording: Path, index: int) -> datetime:
     return timed_points[index - 1]
 
 
+def _get_timestamp_by_coord(recording: Path, lat: float, lon: float) -> datetime:
+    """
+    Return the timestamp of the track point whose lat/lon attributes match
+    (lat, lon) exactly (float comparison).
+
+    Raises
+    ------
+    ValueError
+        If no track point matches the given coordinates, or if more than one
+        track point matches (ambiguous — e.g. a looping track).
+    """
+    root = ET.parse(recording).getroot()
+    matches: list[datetime] = []
+    for trkpt in root.iter(f"{{{GPX_NAMESPACE}}}trkpt"):
+        if float(trkpt.attrib["lat"]) == lat and float(trkpt.attrib["lon"]) == lon:
+            time_el = trkpt.find(f"{{{GPX_NAMESPACE}}}time")
+            if time_el is not None and time_el.text is not None:
+                matches.append(
+                    datetime.fromisoformat(time_el.text.replace("Z", "+00:00"))
+                )
+    if len(matches) == 0:
+        raise ValueError(
+            f"No track point with lat={lat}, lon={lon} found in the recording."
+        )
+    if len(matches) > 1:
+        raise ValueError(
+            f"Coordinate lat={lat}, lon={lon} matches {len(matches)} track points "
+            f"— cannot determine the point unambiguously."
+        )
+    return matches[0]
+
+
 class GPSCleaner:
     """
     Replaces GPS track points in a recording that fall within a given time

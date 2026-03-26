@@ -6,7 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from src.gpscleaner.cli import app
-from src.gpscleaner.gpscleaner import GPSCleaner, GPSSampleRateReducer, _get_timestamp_by_index, _interpolate_positions
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSSampleRateReducer, _get_timestamp_by_coord, _get_timestamp_by_index, _interpolate_positions
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -14,6 +14,14 @@ RECORDING = FIXTURES_DIR / "260322-recording.GPX"
 OUTPUT = FIXTURES_DIR / "260322-recording_cleaned.GPX"
 
 TARGET = FIXTURES_DIR / "260322-reference.GPX"
+
+ZUCCO_RECORDING = FIXTURES_DIR / "Zucco di Manavello.GPX"
+ZUCCO_REFERENCE = FIXTURES_DIR / "Zucco di Manavello reference.GPX"
+ZUCCO_CLEANED   = FIXTURES_DIR / "Zucco di Manavello_cleaned.GPX"
+
+# Coordinates of points 5603 and 7080 in Zucco di Manavello.GPX
+ZUCCO_START_COORD = "45.924565242603421,9.340607235208154"
+ZUCCO_END_COORD   = "45.923309549689293,9.34313572011888"
 
 CAM_RECORDING = FIXTURES_DIR / "1_CAM_20260103124845_0011_D.gpx"
 CAM_REFERENCE = FIXTURES_DIR / "4_CAM_20260103124845_0011_D-reference.GPX"
@@ -263,6 +271,84 @@ class TestGPSCleanerByIndex:
             _get_timestamp_by_index(CAM_RECORDING, 0)
         with pytest.raises(ValueError):
             _get_timestamp_by_index(CAM_RECORDING, 999999)
+
+
+class TestGPSCleanerByCoord:
+
+    @pytest.fixture(autouse=True)
+    def cleanup_zucco_cleaned(self):
+        """Remove the Zucco cleaned output file before each test."""
+        if ZUCCO_CLEANED.exists():
+            ZUCCO_CLEANED.unlink()
+        yield
+
+    def test_output_file_is_created(self):
+        runner.invoke(app, [
+            "--orig", str(ZUCCO_RECORDING),
+            "--start-coord", ZUCCO_START_COORD,
+            "--end-coord",   ZUCCO_END_COORD,
+            "--reference",   str(ZUCCO_REFERENCE),
+        ])
+        assert ZUCCO_CLEANED.exists()
+
+    def test_trackpoint_count_is_preserved(self):
+        original_count = count_trackpoints(ZUCCO_RECORDING)
+        runner.invoke(app, [
+            "--orig", str(ZUCCO_RECORDING),
+            "--start-coord", ZUCCO_START_COORD,
+            "--end-coord",   ZUCCO_END_COORD,
+            "--reference",   str(ZUCCO_REFERENCE),
+        ])
+        assert count_trackpoints(ZUCCO_CLEANED) == original_count
+
+    def test_start_coord_without_end_coord_raises_error(self):
+        result = runner.invoke(app, [
+            "--orig",        str(ZUCCO_RECORDING),
+            "--start-coord", ZUCCO_START_COORD,
+            "--reference",   str(ZUCCO_REFERENCE),
+        ])
+        assert result.exit_code != 0
+        assert "--end-coord" in result.output
+
+    def test_start_coord_with_start_time_raises_error(self):
+        result = runner.invoke(app, [
+            "--orig",        str(ZUCCO_RECORDING),
+            "--start-coord", ZUCCO_START_COORD,
+            "--end-coord",   ZUCCO_END_COORD,
+            "--start",       "2026-01-01T00:00:00Z",
+            "--reference",   str(ZUCCO_REFERENCE),
+        ])
+        assert result.exit_code != 0
+
+    def test_start_coord_with_start_point_raises_error(self):
+        result = runner.invoke(app, [
+            "--orig",        str(ZUCCO_RECORDING),
+            "--start-coord", ZUCCO_START_COORD,
+            "--end-coord",   ZUCCO_END_COORD,
+            "--start-point", "100",
+            "--reference",   str(ZUCCO_REFERENCE),
+        ])
+        assert result.exit_code != 0
+
+    def test_invalid_coord_format_raises_error(self):
+        result = runner.invoke(app, [
+            "--orig",        str(ZUCCO_RECORDING),
+            "--start-coord", "not-a-coord",
+            "--end-coord",   ZUCCO_END_COORD,
+            "--reference",   str(ZUCCO_REFERENCE),
+        ])
+        assert result.exit_code != 0
+
+    def test_get_timestamp_by_coord_returns_correct_time(self):
+        lat, lon = 45.924565242603421, 9.340607235208154
+        ts = _get_timestamp_by_coord(ZUCCO_RECORDING, lat, lon)
+        assert ts.year == 2025
+        assert ts.month == 12
+        assert ts.day == 31
+
+    def test_get_timestamp_by_coord_raises_on_unknown_coord(self):
+        with pytest.raises(ValueError):
+            _get_timestamp_by_coord(ZUCCO_RECORDING, 0.0, 0.0)
 
 
 class TestInterpolatePositions:

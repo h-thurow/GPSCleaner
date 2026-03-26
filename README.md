@@ -93,6 +93,34 @@ python -m gpscleaner \
 
 `--start-point`/`--end-point` and `--start`/`--end` cannot be combined.
 
+#### By GPS coordinate
+
+GPS coordinates can be used to identify the start and end point directly:
+
+```
+python -m gpscleaner --orig FILE --start-coord LAT,LON --end-coord LAT,LON --reference FILE [--plot]
+```
+
+| Option          | Description |
+|-----------------|-------------|
+| `--orig`        | GPX file containing the recording with deviations |
+| `--start-coord` | Coordinate of the first deviating track point (`LAT,LON`) |
+| `--end-coord`   | Coordinate of the last deviating track point (`LAT,LON`) |
+| `--reference`   | GPX file containing the actual route for the given window |
+| `--plot`        | Also save a PNG visualisation of the tracks (optional) |
+
+```bash
+python -m gpscleaner \
+  --orig  /path/to/recording.gpx \
+  --start-coord 45.924565242603421,9.340607235208154 \
+  --end-coord   45.923309549689293,9.343135720118880 \
+  --reference /path/to/reference.gpx
+```
+
+Coordinates must match a track point in `--orig` exactly. JOSM displays coordinates in the format `45.9245652, 9.3406072` — remove the space after the comma to get `45.9245652,9.3406072`. The coordinate must be unique within the track; if it occurs more than once (e.g. a looping route), an error is raised.
+
+`--start-coord`/`--end-coord` cannot be combined with `--start`/`--end` or `--start-point`/`--end-point`.
+
 ### Reduce sample rate
 
 Some GPS devices (e.g. dashcams) record at a very high sample rate. Use `--sample-rate` to reduce the number of positions per second:
