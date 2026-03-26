@@ -176,4 +176,4 @@ recording.gpx  →  recording_cleaned.gpx
 
 With `--plot`, an additional PNG file is created. For track correction it shows the original recording (blue), reference route (green), and cleaned track (red). For sample rate reduction it shows the original (blue) and the reduced track (red).
 
-![GPS Tracks](readme_resources/Zucco di Manavello_sample-rate=0.05_cleaned.png)
+![GPS Tracks](readme_resources/Zucco%20di%20Manavello_sample-rate=0.05_cleaned.png)
