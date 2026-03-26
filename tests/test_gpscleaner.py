@@ -16,7 +16,10 @@ OUTPUT = FIXTURES_DIR / "260322-recording_cleaned.GPX"
 TARGET = FIXTURES_DIR / "260322-reference.GPX"
 
 CAM_RECORDING = FIXTURES_DIR / "1_CAM_20260103124845_0011_D.gpx"
-CAM_OUTPUT = FIXTURES_DIR / "1_CAM_20260103124845_0011_D_cleaned.gpx"
+
+
+def cam_output(sample_rate: float) -> Path:
+    return FIXTURES_DIR / f"1_CAM_20260103124845_0011_D_sample-rate={sample_rate}.gpx"
 
 START_TIME_UTC = datetime(2026, 3, 22, 15, 6, 8, tzinfo=timezone.utc)
 END_TIME_UTC = datetime(2026, 3, 22, 15, 30, 50, tzinfo=timezone.utc)
@@ -106,14 +109,14 @@ class TestGPSSampleRateReducer:
     @pytest.fixture(autouse=True)
     def cleanup_cam_output(self):
         """Remove the CAM output file before each test."""
-        if CAM_OUTPUT.exists():
-            CAM_OUTPUT.unlink()
+        for f in FIXTURES_DIR.glob("1_CAM_20260103124845_0011_D_sample-rate=*.gpx"):
+            f.unlink()
         yield
 
     def test_output_file_is_created(self):
         # 1_CAM has ~25 positions/second; reduce to 1/s
         GPSSampleRateReducer(CAM_RECORDING, 1.0).start()
-        assert CAM_OUTPUT.exists()
+        assert cam_output(1.0).exists()
 
     def test_original_file_is_not_modified(self):
         original_content = CAM_RECORDING.read_bytes()
@@ -124,7 +127,7 @@ class TestGPSSampleRateReducer:
         # 1_CAM has ~25 positions/second; reducing to 1/s should keep roughly 1/25
         original_count = count_trackpoints(CAM_RECORDING)
         GPSSampleRateReducer(CAM_RECORDING, 1.0).start()
-        reduced_count = count_trackpoints(CAM_OUTPUT)
+        reduced_count = count_trackpoints(cam_output(1.0))
         assert reduced_count < original_count
         assert reduced_count < original_count / 10
 

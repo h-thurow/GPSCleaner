@@ -289,7 +289,7 @@ class GPSSampleRateReducer:
                     trkseg.remove(trkpt)
 
         output_path = self._recording.parent / (
-            self._recording.stem + "_cleaned" + self._recording.suffix
+            self._recording.stem + f"_sample-rate={self._target_sample_rate}" + self._recording.suffix
         )
         recording_tree.write(output_path, xml_declaration=True, encoding="utf-8")
 

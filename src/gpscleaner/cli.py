@@ -122,8 +122,8 @@ def main(
         GPSSampleRateReducer(orig, sample_rate).start()
 
         if plot:
-            cleaned = orig.parent / (orig.stem + "_cleaned" + orig.suffix)
-            output_png = orig.parent / (orig.stem + "_cleaned.png")
+            cleaned = orig.parent / (orig.stem + f"_sample-rate={sample_rate}" + orig.suffix)
+            output_png = orig.parent / (orig.stem + f"_sample-rate={sample_rate}.png")
             _plot_tracks(orig, None, cleaned, output_png)
 
     else:
