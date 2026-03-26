@@ -4,7 +4,7 @@ from pathlib import Path
 
 import typer
 
-from src.gpscleaner.gpscleaner import GPSCleaner, GPSSampleRateReducer
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSSampleRateReducer, _get_timestamp_by_index
 
 app = typer.Typer(add_completion=False)
 
@@ -90,6 +90,16 @@ def main(
         None,
         help="End of the deviation window (UTC), e.g. 2026-03-22T13:20:00Z",
     ),
+    start_point: int | None = typer.Option(
+        None,
+        "--start-point",
+        help="Index of the first deviating track point (1 = first point in the recording)",
+    ),
+    end_point: int | None = typer.Option(
+        None,
+        "--end-point",
+        help="Index of the last deviating track point (1 = first point in the recording)",
+    ),
     reference: Path | None = typer.Option(
         None,
         exists=True,
@@ -108,12 +118,16 @@ def main(
 ) -> None:
     """
     Clean a GPS recording by replacing deviating track points with positions
-    from a reference route, or reduce the recording's sample sample_rate.
+    from a reference route, or reduce the recording's sample rate.
     """
+    using_index = start_point is not None or end_point is not None
+    using_time  = start       is not None or end       is not None
+
     if sample_rate is not None:
-        if start is not None or end is not None or reference is not None:
+        if using_time or using_index or reference is not None:
             typer.echo(
-                "Error: --start, --end, and --reference cannot be used with --sample-rate.\n"
+                "Error: --start, --end, --start-point, --end-point, and --reference "
+                "cannot be used with --sample-rate.\n"
                 "       When using --sample-rate, only --orig and --plot are allowed.",
                 err=True,
             )
@@ -125,6 +139,51 @@ def main(
             cleaned = orig.parent / (orig.stem + f"_sample-rate={sample_rate}" + orig.suffix)
             output_png = orig.parent / (orig.stem + f"_sample-rate={sample_rate}.png")
             _plot_tracks(orig, None, cleaned, output_png)
+
+    elif using_index:
+        if using_time:
+            typer.echo(
+                "Error: --start and --end cannot be used together with --start-point and --end-point.\n"
+                "       Use either time-based (--start/--end) or index-based (--start-point/--end-point).",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        if start_point is None or end_point is None:
+            missing = []
+            if start_point is None:
+                missing.append("--start-point")
+            if end_point is None:
+                missing.append("--end-point")
+            typer.echo(
+                f"Error: {', '.join(missing)} {'is' if len(missing) == 1 else 'are'} required "
+                f"when using index-based mode.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        if reference is None:
+            typer.echo("Error: --reference is required.", err=True)
+            raise typer.Exit(code=1)
+
+        try:
+            start_time = _get_timestamp_by_index(orig, start_point)
+            end_time   = _get_timestamp_by_index(orig, end_point)
+        except ValueError as error:
+            typer.echo(f"Error: {error}", err=True)
+            raise typer.Exit(code=1)
+
+        GPSCleaner(
+            start_time=start_time,
+            end_time=end_time,
+            recording=orig,
+            target=reference,
+        ).start()
+
+        if plot:
+            cleaned = orig.parent / (orig.stem + "_cleaned" + orig.suffix)
+            output_png = orig.parent / (orig.stem + "_cleaned.png")
+            _plot_tracks(orig, reference, cleaned, output_png)
 
     else:
         missing = [

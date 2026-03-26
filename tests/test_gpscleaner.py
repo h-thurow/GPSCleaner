@@ -6,7 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from src.gpscleaner.cli import app
-from src.gpscleaner.gpscleaner import GPSCleaner, GPSSampleRateReducer, _interpolate_positions
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSSampleRateReducer, _get_timestamp_by_index, _interpolate_positions
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -16,6 +16,8 @@ OUTPUT = FIXTURES_DIR / "260322-recording_cleaned.GPX"
 TARGET = FIXTURES_DIR / "260322-reference.GPX"
 
 CAM_RECORDING = FIXTURES_DIR / "1_CAM_20260103124845_0011_D.gpx"
+CAM_REFERENCE = FIXTURES_DIR / "4_CAM_20260103124845_0011_D-reference.GPX"
+CAM_CLEANED   = FIXTURES_DIR / "1_CAM_20260103124845_0011_D_cleaned.gpx"
 
 
 def cam_output(sample_rate: float) -> Path:
@@ -164,6 +166,103 @@ class TestGPSSampleRateReducer:
         ])
         assert result.exit_code != 0
         assert "--sample-rate" in result.output
+
+
+class TestGPSCleanerByIndex:
+
+    @pytest.fixture(autouse=True)
+    def cleanup_cam_cleaned(self):
+        """Remove the CAM cleaned output file before each test."""
+        if CAM_CLEANED.exists():
+            CAM_CLEANED.unlink()
+        yield
+
+    def test_output_file_is_created(self):
+        runner.invoke(app, [
+            "--orig", str(CAM_RECORDING),
+            "--start-point", "100",
+            "--end-point", "200",
+            "--reference", str(CAM_REFERENCE),
+        ])
+        assert CAM_CLEANED.exists()
+
+    def test_trackpoint_count_is_preserved(self):
+        original_count = count_trackpoints(CAM_RECORDING)
+        runner.invoke(app, [
+            "--orig", str(CAM_RECORDING),
+            "--start-point", "100",
+            "--end-point", "200",
+            "--reference", str(CAM_REFERENCE),
+        ])
+        assert count_trackpoints(CAM_CLEANED) == original_count
+
+    def test_points_in_index_window_have_new_coordinates(self):
+        root_original = ET.parse(CAM_RECORDING).getroot()
+        all_original = list(root_original.iter(f"{{{GPX_NS}}}trkpt"))
+        original_lats = [float(p.attrib["lat"]) for p in all_original[99:200]]
+
+        runner.invoke(app, [
+            "--orig", str(CAM_RECORDING),
+            "--start-point", "100",
+            "--end-point", "200",
+            "--reference", str(CAM_REFERENCE),
+        ])
+
+        root_cleaned = ET.parse(CAM_CLEANED).getroot()
+        all_cleaned = list(root_cleaned.iter(f"{{{GPX_NS}}}trkpt"))
+        cleaned_lats = [float(p.attrib["lat"]) for p in all_cleaned[99:200]]
+
+        assert cleaned_lats != original_lats
+
+    def test_start_point_without_end_point_raises_error(self):
+        result = runner.invoke(app, [
+            "--orig", str(CAM_RECORDING),
+            "--start-point", "100",
+            "--reference", str(CAM_REFERENCE),
+        ])
+        assert result.exit_code != 0
+        assert "--end-point" in result.output
+
+    def test_start_point_with_start_time_raises_error(self):
+        result = runner.invoke(app, [
+            "--orig", str(CAM_RECORDING),
+            "--start-point", "100",
+            "--end-point", "200",
+            "--start", "2026-01-03T11:48:46Z",
+            "--reference", str(CAM_REFERENCE),
+        ])
+        assert result.exit_code != 0
+
+    def test_invalid_index_zero_raises_error(self):
+        result = runner.invoke(app, [
+            "--orig", str(CAM_RECORDING),
+            "--start-point", "0",
+            "--end-point", "200",
+            "--reference", str(CAM_REFERENCE),
+        ])
+        assert result.exit_code != 0
+
+    def test_invalid_index_too_large_raises_error(self):
+        result = runner.invoke(app, [
+            "--orig", str(CAM_RECORDING),
+            "--start-point", "100",
+            "--end-point", "999999",
+            "--reference", str(CAM_REFERENCE),
+        ])
+        assert result.exit_code != 0
+
+    def test_get_timestamp_by_index_returns_correct_time(self):
+        # First point has a known timestamp
+        ts = _get_timestamp_by_index(CAM_RECORDING, 1)
+        assert ts.year == 2026
+        assert ts.month == 1
+        assert ts.day == 3
+
+    def test_get_timestamp_by_index_raises_on_invalid_index(self):
+        with pytest.raises(ValueError):
+            _get_timestamp_by_index(CAM_RECORDING, 0)
+        with pytest.raises(ValueError):
+            _get_timestamp_by_index(CAM_RECORDING, 999999)
 
 
 class TestInterpolatePositions:

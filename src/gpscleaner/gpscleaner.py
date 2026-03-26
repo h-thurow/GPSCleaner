@@ -98,6 +98,41 @@ def _interpolate_positions(
     return result
 
 
+def _get_timestamp_by_index(recording: Path, index: int) -> datetime:
+    """
+    Return the timestamp of the track point at the given 1-based index.
+
+    Parameters
+    ----------
+    recording : Path
+        Path to the GPX file.
+    index : int
+        1-based index of the track point (1 = first point).
+
+    Raises
+    ------
+    ValueError
+        If the index is less than 1 or exceeds the number of track points
+        with a timestamp.
+    """
+    root = ET.parse(recording).getroot()
+    timed_points: list[datetime] = []
+    for trkpt in root.iter(f"{{{GPX_NAMESPACE}}}trkpt"):
+        time_element = trkpt.find(f"{{{GPX_NAMESPACE}}}time")
+        if time_element is not None and time_element.text is not None:
+            timed_points.append(
+                datetime.fromisoformat(time_element.text.replace("Z", "+00:00"))
+            )
+
+    if index < 1 or index > len(timed_points):
+        raise ValueError(
+            f"Index {index} is out of range. "
+            f"The recording has {len(timed_points)} track points with timestamps."
+        )
+
+    return timed_points[index - 1]
+
+
 class GPSCleaner:
     """
     Replaces GPS track points in a recording that fall within a given time

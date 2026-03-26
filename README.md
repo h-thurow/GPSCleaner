@@ -41,6 +41,10 @@ pip install -e .
 
 ### Correct a deviated track
 
+The deviation window can be specified either by **timestamps** or by **track point indices**.
+
+#### By timestamp
+
 ```
 python -m gpscleaner --orig FILE --start TIME --end TIME --reference FILE [--plot]
 ```
@@ -62,6 +66,32 @@ python -m gpscleaner \
   --end   2026-03-22T15:30:50Z \
   --reference /path/to/reference.gpx
 ```
+
+#### By track point index
+
+For high sample-rate recordings (e.g. dashcams at 25 fps), Garmin BaseCamp shows timestamps only to the nearest second, which is too imprecise. Use track point indices instead:
+
+```
+python -m gpscleaner --orig FILE --start-point N --end-point N --reference FILE [--plot]
+```
+
+| Option          | Description |
+|-----------------|-------------|
+| `--orig`        | GPX file containing the recording with deviations |
+| `--start-point` | Index of the first deviating track point (1 = first point) |
+| `--end-point`   | Index of the last deviating track point (1 = first point) |
+| `--reference`   | GPX file containing the actual route for the given time window |
+| `--plot`        | Also save a PNG visualisation of the tracks (optional) |
+
+```bash
+python -m gpscleaner \
+  --orig  /path/to/recording.gpx \
+  --start-point 1250 \
+  --end-point   3400 \
+  --reference /path/to/reference.gpx
+```
+
+`--start-point`/`--end-point` and `--start`/`--end` cannot be combined.
 
 ### Reduce sample rate
 
