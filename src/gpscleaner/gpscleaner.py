@@ -496,15 +496,26 @@ class GPSRetimer:
     that segment. If all points in a segment are at the same location (total
     distance is zero), timestamps are distributed evenly in time instead.
 
+    When sample_rate is given, additional track points are inserted within each
+    gap section (between the anchor points) by linear interpolation so that the
+    time interval between consecutive kept points does not exceed 1/sample_rate.
+    Existing gap points are always kept. Points outside gap sections are never
+    modified or supplemented.
+
     The first and last track points of the recording must have timestamps;
     otherwise processing is aborted with an error message.
 
     Usage:
-        retimer = GPSRetimer(recording, overwrite)
+        retimer = GPSRetimer(recording, overwrite, sample_rate)
         retimer.start()
     """
 
-    def __init__(self, recording: Path, overwrite: bool = False) -> None:
+    def __init__(
+        self,
+        recording: Path,
+        overwrite: bool = False,
+        sample_rate: float | None = None,
+    ) -> None:
         """
         Parameters
         ----------
@@ -514,9 +525,13 @@ class GPSRetimer:
             If True, the original recording is overwritten in place.
             If False (default), the result is written to a new file with the
             suffix "_retimed" added before the file extension.
+        sample_rate : float | None
+            If given, additional interpolated points are inserted in gap sections
+            so that consecutive points are at most 1/sample_rate seconds apart.
         """
         self._recording = recording
         self._overwrite = overwrite
+        self._sample_rate = sample_rate
 
     def start(self) -> None:
         """
@@ -525,7 +540,8 @@ class GPSRetimer:
         2. Verify the first and last track points have timestamps.
         3. Find all gaps (consecutive runs of track points without <time>).
         4. For each gap, interpolate timestamps from the surrounding anchors.
-        5. Write the result to a new file (or overwrite the original).
+        5. If sample_rate is set, insert additional interpolated points in gap zones.
+        6. Write the result to a new file (or overwrite the original).
         """
         ET.register_namespace("", GPX_NAMESPACE)
 
@@ -572,6 +588,7 @@ class GPSRetimer:
 
         total_assigned = 0
 
+        # Episode 1: assign timestamps to gap points
         for gap_start, gap_end in gaps:
             anchor_start_pt = all_trkpts[gap_start - 1]
             anchor_end_pt   = all_trkpts[gap_end + 1]
@@ -627,6 +644,44 @@ class GPSRetimer:
 
             total_assigned += n_gap
 
+        total_inserted = 0
+
+        # Episode 2: insert interpolated points within gap zones (only if sample_rate given)
+        if self._sample_rate is not None:
+            interval = 1.0 / self._sample_rate
+
+            # Use object identity to mark which trkpts belong to gap zones
+            # (anchor_start and anchor_end inclusive)
+            gap_zone_ids: set[int] = set()
+            for gap_start, gap_end in gaps:
+                for idx in range(gap_start - 1, gap_end + 2):
+                    gap_zone_ids.add(id(all_trkpts[idx]))
+
+            for trkseg in root.iter(f"{{{GPX_NAMESPACE}}}trkseg"):
+                old_trkpts = [
+                    c for c in trkseg if c.tag == f"{{{GPX_NAMESPACE}}}trkpt"
+                ]
+                new_trkpts: list[ET.Element] = []
+
+                for j, trkpt in enumerate(old_trkpts):
+                    new_trkpts.append(trkpt)
+                    if (
+                        j + 1 < len(old_trkpts)
+                        and id(trkpt) in gap_zone_ids
+                        and id(old_trkpts[j + 1]) in gap_zone_ids
+                    ):
+                        inserted = self._interpolate_points(
+                            trkpt, old_trkpts[j + 1], interval, get_time
+                        )
+                        new_trkpts.extend(inserted)
+                        total_inserted += len(inserted)
+
+                # Rebuild trkseg in-place
+                for trkpt in old_trkpts:
+                    trkseg.remove(trkpt)
+                for trkpt in new_trkpts:
+                    trkseg.append(trkpt)
+
         if self._overwrite:
             output_path = self._recording
         else:
@@ -636,8 +691,64 @@ class GPSRetimer:
 
         tree.write(output_path, xml_declaration=True, encoding="utf-8")
 
-        print(f"Done. {total_assigned} timestamps assigned.")
+        msg = f"Done. {total_assigned} timestamps assigned."
+        if self._sample_rate is not None:
+            msg += f" {total_inserted} points inserted."
+        print(msg)
         print(f"Output written to: {output_path}")
+
+    def _interpolate_points(
+        self,
+        a: ET.Element,
+        b: ET.Element,
+        interval: float,
+        get_time,
+    ) -> list[ET.Element]:
+        """
+        Return a list of new track points to insert between a and b so that
+        consecutive points are at most interval seconds apart.
+
+        Positions (lat, lon, ele) are linearly interpolated between a and b.
+        Timestamps are evenly spaced starting at a.time + interval.
+        If the time gap between a and b is at most interval, returns [].
+        """
+        a_time = get_time(a)
+        b_time = get_time(b)
+        time_gap = (b_time - a_time).total_seconds()
+        n_new = max(0, math.ceil(time_gap / interval) - 1)
+        if n_new == 0:
+            return []
+
+        a_lat = float(a.attrib["lat"])
+        a_lon = float(a.attrib["lon"])
+        b_lat = float(b.attrib["lat"])
+        b_lon = float(b.attrib["lon"])
+
+        a_ele_el = a.find(f"{{{GPX_NAMESPACE}}}ele")
+        b_ele_el = b.find(f"{{{GPX_NAMESPACE}}}ele")
+        has_ele = a_ele_el is not None and b_ele_el is not None
+
+        result: list[ET.Element] = []
+        for k in range(1, n_new + 1):
+            fraction = k * interval / time_gap
+
+            trkpt = ET.Element(f"{{{GPX_NAMESPACE}}}trkpt")
+            trkpt.attrib["lat"] = f"{a_lat + fraction * (b_lat - a_lat):.15f}"
+            trkpt.attrib["lon"] = f"{a_lon + fraction * (b_lon - a_lon):.15f}"
+
+            if has_ele:
+                a_ele = float(a_ele_el.text)
+                b_ele = float(b_ele_el.text)
+                ele_el = ET.SubElement(trkpt, f"{{{GPX_NAMESPACE}}}ele")
+                ele_el.text = f"{a_ele + fraction * (b_ele - a_ele):.6f}"
+
+            new_time = a_time + k * timedelta(seconds=interval)
+            time_el = ET.SubElement(trkpt, f"{{{GPX_NAMESPACE}}}time")
+            time_el.text = new_time.isoformat().replace("+00:00", "Z")
+
+            result.append(trkpt)
+
+        return result
 
 
 def _parse_timed_trackpoints(

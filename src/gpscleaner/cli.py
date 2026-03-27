@@ -358,6 +358,11 @@ def retime(
         "--overwrite",
         help="Overwrite the recording in place instead of creating a new file",
     ),
+    sample_rate: float | None = typer.Option(
+        None,
+        "--sample-rate",
+        help="Insert additional points in gap sections to reach this sample rate (positions/second)",
+    ),
     plot: bool = typer.Option(
         False,
         "--plot",
@@ -367,6 +372,7 @@ def retime(
     """
     Assign timestamps to track points that have none, based on their
     distance from the surrounding timestamped points (constant-speed assumption).
+    Optionally insert additional interpolated points to reach a target sample rate.
     """
     if plot:
         typer.echo(
@@ -374,7 +380,7 @@ def retime(
             err=True,
         )
         raise typer.Exit(code=1)
-    GPSRetimer(recording, overwrite).start()
+    GPSRetimer(recording, overwrite, sample_rate).start()
 
 
 if __name__ == "__main__":

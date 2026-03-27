@@ -243,21 +243,29 @@ points based on their distance from the surrounding timestamped points, assuming
 constant speed throughout each affected section.
 
 ```
-python -m gpscleaner retime --recording FILE [--overwrite]
+python -m gpscleaner retime --recording FILE [--overwrite] [--sample-rate RATE]
 ```
 
-| Option        | Description |
-|---------------|-------------|
-| `--recording` | GPX file containing track points without timestamps |
-| `--overwrite` | Overwrite the recording in place instead of creating a new file (optional) |
+| Option          | Description |
+|-----------------|-------------|
+| `--recording`   | GPX file containing track points without timestamps |
+| `--overwrite`   | Overwrite the recording in place instead of creating a new file (optional) |
+| `--sample-rate` | Insert additional points in gap sections so that consecutive points are at most 1/RATE seconds apart (optional) |
 
 ```bash
 python -m gpscleaner retime --recording /path/to/recording.gpx
+
+python -m gpscleaner retime --recording /path/to/recording.gpx --sample-rate 25
 ```
 
 The first and last track points of the recording must have timestamps; otherwise
 processing is aborted with an error message. If no points without timestamps are
 found, a message is printed and no output file is created.
+
+With `--sample-rate`, additional track points are inserted within gap sections by
+linear interpolation of position and evenly spaced timestamps. Existing gap points
+are always kept. If the time between two consecutive gap points is already shorter
+than 1/RATE seconds, no new points are inserted between them.
 
 `--plot` is not supported (coordinates are not changed) and results in an error.
 

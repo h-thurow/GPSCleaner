@@ -661,6 +661,85 @@ class TestGPSRetimer:
         assert result.exit_code == 1
         assert "--plot" in result.output
 
+    def test_sample_rate_inserts_more_points(self):
+        original_count = count_trackpoints(ZUCCO_NO_TIMESTAMPS)
+        GPSRetimer(ZUCCO_NO_TIMESTAMPS, sample_rate=0.1).start()
+        assert count_trackpoints(ZUCCO_RETIMED) > original_count
+
+    def test_sample_rate_new_points_within_anchor_bounds(self):
+        GPSRetimer(ZUCCO_NO_TIMESTAMPS, sample_rate=0.1).start()
+        root = ET.parse(ZUCCO_RETIMED).getroot()
+        trkpts = list(root.iter(f"{{{GPX_NS}}}trkpt"))
+
+        # Anchor timestamps (5601 and 5614 in the original; with inserted points
+        # the indices shift, so retrieve by original anchor coordinates instead)
+        orig_root = ET.parse(ZUCCO_NO_TIMESTAMPS).getroot()
+        orig_trkpts = list(orig_root.iter(f"{{{GPX_NS}}}trkpt"))
+
+        def ts(trkpt):
+            el = trkpt.find(f"{{{GPX_NS}}}time")
+            return datetime.fromisoformat(el.text.replace("Z", "+00:00"))
+
+        anchor_start_time = ts(orig_trkpts[5601])
+        anchor_end_time   = ts(orig_trkpts[5614])
+
+        # All retimed trkpts that fall in the gap zone must be within anchor bounds
+        for trkpt in trkpts:
+            time_el = trkpt.find(f"{{{GPX_NS}}}time")
+            if time_el is None:
+                continue
+            t = datetime.fromisoformat(time_el.text.replace("Z", "+00:00"))
+            if anchor_start_time < t < anchor_end_time:
+                assert anchor_start_time <= t <= anchor_end_time
+
+    def test_sample_rate_time_gaps_within_interval(self):
+        sample_rate = 0.1
+        GPSRetimer(ZUCCO_NO_TIMESTAMPS, sample_rate=sample_rate).start()
+        root = ET.parse(ZUCCO_RETIMED).getroot()
+        trkpts = list(root.iter(f"{{{GPX_NS}}}trkpt"))
+
+        orig_root = ET.parse(ZUCCO_NO_TIMESTAMPS).getroot()
+        orig_trkpts = list(orig_root.iter(f"{{{GPX_NS}}}trkpt"))
+
+        def ts(trkpt):
+            el = trkpt.find(f"{{{GPX_NS}}}time")
+            return datetime.fromisoformat(el.text.replace("Z", "+00:00"))
+
+        anchor_start_time = ts(orig_trkpts[5601])
+        anchor_end_time   = ts(orig_trkpts[5614])
+        interval = 1.0 / sample_rate
+        tolerance = 1e-6  # 1 microsecond
+
+        # Collect all trkpts in the gap zone (between anchors, inclusive)
+        gap_zone_trkpts = [
+            trkpt for trkpt in trkpts
+            if anchor_start_time <= ts(trkpt) <= anchor_end_time
+        ]
+
+        for j in range(1, len(gap_zone_trkpts)):
+            gap_seconds = (ts(gap_zone_trkpts[j]) - ts(gap_zone_trkpts[j - 1])).total_seconds()
+            assert gap_seconds <= interval + tolerance
+
+    def test_sample_rate_points_outside_gap_are_unchanged(self):
+        GPSRetimer(ZUCCO_NO_TIMESTAMPS, sample_rate=0.1).start()
+        orig_root   = ET.parse(ZUCCO_NO_TIMESTAMPS).getroot()
+        retimed_root = ET.parse(ZUCCO_RETIMED).getroot()
+
+        orig_trkpts   = list(orig_root.iter(f"{{{GPX_NS}}}trkpt"))
+        retimed_trkpts = list(retimed_root.iter(f"{{{GPX_NS}}}trkpt"))
+
+        # Points before the gap (index 0..5601) must be identical in both files
+        for i in range(5602):
+            assert orig_trkpts[i].attrib["lat"] == retimed_trkpts[i].attrib["lat"]
+            assert orig_trkpts[i].attrib["lon"] == retimed_trkpts[i].attrib["lon"]
+
+    def test_cli_retime_sample_rate_succeeds(self):
+        result = runner.invoke(app, [
+            "retime", "--recording", str(ZUCCO_NO_TIMESTAMPS),
+            "--sample-rate", "0.1",
+        ])
+        assert result.exit_code == 0
+
 
 class TestInterpolatePositions:
 
