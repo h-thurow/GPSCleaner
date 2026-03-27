@@ -6,7 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from src.gpscleaner.cli import app
-from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSSampleRateReducer, _get_timestamp_by_coord, _get_timestamp_by_index, _interpolate_positions, compare_tracks
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSRetimer, GPSSampleRateReducer, _get_timestamp_by_coord, _get_timestamp_by_index, _haversine_distance, _interpolate_positions, compare_tracks
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -22,6 +22,9 @@ ZUCCO_CLEANED   = FIXTURES_DIR / "Zucco di Manavello_cleaned.GPX"
 # Coordinates of points 5603 and 7080 in Zucco di Manavello.GPX
 ZUCCO_START_COORD = "45.924565242603421,9.340607235208154"
 ZUCCO_END_COORD   = "45.923309549689293,9.34313572011888"
+
+ZUCCO_NO_TIMESTAMPS = FIXTURES_DIR / "Zucco_di_Manavello-sections_without_timestamps.GPX"
+ZUCCO_RETIMED       = FIXTURES_DIR / "Zucco_di_Manavello-sections_without_timestamps_retimed.GPX"
 
 CAM_RECORDING = FIXTURES_DIR / "1_CAM_20260103124845_0011_D.gpx"
 CAM_REFERENCE = FIXTURES_DIR / "4_CAM_20260103124845_0011_D-reference.GPX"
@@ -499,6 +502,164 @@ class TestCompare:
             "--reference", str(TARGET),
         ])
         assert result.exit_code != 0
+
+
+class TestGPSRetimer:
+
+    @pytest.fixture(autouse=True)
+    def cleanup_retimed(self):
+        """Remove the retimed output file before each test."""
+        if ZUCCO_RETIMED.exists():
+            ZUCCO_RETIMED.unlink()
+        yield
+        if ZUCCO_RETIMED.exists():
+            ZUCCO_RETIMED.unlink()
+
+    def test_output_file_is_created(self):
+        GPSRetimer(ZUCCO_NO_TIMESTAMPS).start()
+        assert ZUCCO_RETIMED.exists()
+
+    def test_original_file_is_not_modified(self):
+        original_bytes = ZUCCO_NO_TIMESTAMPS.read_bytes()
+        GPSRetimer(ZUCCO_NO_TIMESTAMPS).start()
+        assert ZUCCO_NO_TIMESTAMPS.read_bytes() == original_bytes
+
+    def test_all_points_have_timestamps_after_retime(self):
+        GPSRetimer(ZUCCO_NO_TIMESTAMPS).start()
+        root = ET.parse(ZUCCO_RETIMED).getroot()
+        for trkpt in root.iter(f"{{{GPX_NS}}}trkpt"):
+            time_el = trkpt.find(f"{{{GPX_NS}}}time")
+            assert time_el is not None and time_el.text is not None
+
+    def test_timestamps_outside_gap_are_unchanged(self):
+        GPSRetimer(ZUCCO_NO_TIMESTAMPS).start()
+        root_orig   = ET.parse(ZUCCO_NO_TIMESTAMPS).getroot()
+        root_retimed = ET.parse(ZUCCO_RETIMED).getroot()
+
+        orig_trkpts   = list(root_orig.iter(f"{{{GPX_NS}}}trkpt"))
+        retimed_trkpts = list(root_retimed.iter(f"{{{GPX_NS}}}trkpt"))
+
+        assert len(orig_trkpts) == len(retimed_trkpts)
+
+        for orig, retimed in zip(orig_trkpts, retimed_trkpts):
+            orig_time_el = orig.find(f"{{{GPX_NS}}}time")
+            if orig_time_el is None or orig_time_el.text is None:
+                continue  # gap point — skip
+            retimed_time_el = retimed.find(f"{{{GPX_NS}}}time")
+            assert retimed_time_el is not None
+            assert orig_time_el.text == retimed_time_el.text
+
+    def test_gap_timestamps_are_monotonically_increasing(self):
+        GPSRetimer(ZUCCO_NO_TIMESTAMPS).start()
+        root = ET.parse(ZUCCO_RETIMED).getroot()
+        trkpts = list(root.iter(f"{{{GPX_NS}}}trkpt"))
+
+        # The gap in Zucco_no_timestamps is at indices 5602-5613 (12 points)
+        gap_times = []
+        for trkpt in trkpts[5602:5614]:
+            time_el = trkpt.find(f"{{{GPX_NS}}}time")
+            assert time_el is not None
+            gap_times.append(datetime.fromisoformat(time_el.text.replace("Z", "+00:00")))
+
+        for j in range(1, len(gap_times)):
+            assert gap_times[j] > gap_times[j - 1]
+
+    def test_gap_timestamps_are_proportional_to_distance(self):
+        GPSRetimer(ZUCCO_NO_TIMESTAMPS).start()
+        root = ET.parse(ZUCCO_RETIMED).getroot()
+        trkpts = list(root.iter(f"{{{GPX_NS}}}trkpt"))
+
+        # Anchors: index 5601 (before gap) and 5614 (after gap)
+        # Gap points: indices 5602-5613
+        def ts(trkpt):
+            el = trkpt.find(f"{{{GPX_NS}}}time")
+            return datetime.fromisoformat(el.text.replace("Z", "+00:00"))
+
+        anchor_start = ts(trkpts[5601])
+        anchor_end   = ts(trkpts[5614])
+        time_span = (anchor_end - anchor_start).total_seconds()
+
+        # Build segment [5601, 5602, ..., 5614] and compute cumulative distances
+        segment = trkpts[5601:5615]
+        cumulative = [0.0]
+        for j in range(1, len(segment)):
+            prev, curr = segment[j - 1], segment[j]
+            cumulative.append(cumulative[-1] + _haversine_distance(
+                float(prev.attrib["lat"]), float(prev.attrib["lon"]),
+                float(curr.attrib["lat"]), float(curr.attrib["lon"]),
+            ))
+        total_dist = cumulative[-1]
+
+        tolerance_seconds = 1e-6  # 1 microsecond
+
+        for i_gap, trkpt in enumerate(trkpts[5602:5614]):
+            seg_idx = i_gap + 1
+            expected_fraction = cumulative[seg_idx] / total_dist
+            actual_seconds = (ts(trkpt) - anchor_start).total_seconds()
+            actual_fraction = actual_seconds / time_span
+            assert abs(actual_fraction - expected_fraction) * time_span <= tolerance_seconds
+
+    def test_overwrite_modifies_original(self, tmp_path):
+        copy = tmp_path / ZUCCO_NO_TIMESTAMPS.name
+        copy.write_bytes(ZUCCO_NO_TIMESTAMPS.read_bytes())
+        original_bytes = copy.read_bytes()
+
+        GPSRetimer(copy, overwrite=True).start()
+
+        assert copy.read_bytes() != original_bytes
+        retimed_copy = tmp_path / (copy.stem + "_retimed" + copy.suffix)
+        assert not retimed_copy.exists()
+
+    def test_first_point_without_timestamp_raises_error(self, capsys, tmp_path):
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><trkseg>"
+            '<trkpt lat="47.0" lon="9.0"><ele>400.0</ele></trkpt>'
+            '<trkpt lat="47.1" lon="9.0"><ele>400.0</ele><time>2026-01-01T10:00:00Z</time></trkpt>'
+            "</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "no_first_time.gpx"
+        gpx_file.write_text(gpx)
+        GPSRetimer(gpx_file).start()
+        captured = capsys.readouterr()
+        assert "first" in captured.out.lower()
+        assert not (tmp_path / "no_first_time_retimed.gpx").exists()
+
+    def test_last_point_without_timestamp_raises_error(self, capsys, tmp_path):
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><trkseg>"
+            '<trkpt lat="47.0" lon="9.0"><ele>400.0</ele><time>2026-01-01T10:00:00Z</time></trkpt>'
+            '<trkpt lat="47.1" lon="9.0"><ele>400.0</ele></trkpt>'
+            "</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "no_last_time.gpx"
+        gpx_file.write_text(gpx)
+        GPSRetimer(gpx_file).start()
+        captured = capsys.readouterr()
+        assert "last" in captured.out.lower()
+        assert not (tmp_path / "no_last_time_retimed.gpx").exists()
+
+    def test_no_gaps_prints_message(self, capsys):
+        # ZUCCO_RECORDING has no missing timestamps
+        GPSRetimer(ZUCCO_RECORDING).start()
+        captured = capsys.readouterr()
+        assert "No track points without timestamps found" in captured.out
+
+    def test_cli_retime_succeeds(self):
+        result = runner.invoke(app, [
+            "retime", "--recording", str(ZUCCO_NO_TIMESTAMPS),
+        ])
+        assert result.exit_code == 0
+
+    def test_cli_plot_raises_error(self):
+        result = runner.invoke(app, [
+            "retime", "--recording", str(ZUCCO_NO_TIMESTAMPS), "--plot",
+        ])
+        assert result.exit_code == 1
+        assert "--plot" in result.output
 
 
 class TestInterpolatePositions:

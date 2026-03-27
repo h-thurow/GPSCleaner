@@ -4,7 +4,7 @@ from pathlib import Path
 
 import typer
 
-from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSSampleRateReducer, _get_timestamp_by_coord, _get_timestamp_by_index, compare_tracks
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSRetimer, GPSSampleRateReducer, _get_timestamp_by_coord, _get_timestamp_by_index, compare_tracks
 
 app = typer.Typer(add_completion=False)
 
@@ -343,6 +343,38 @@ def clean(
             cleaned = recording.parent / (recording.stem + "_cleaned" + recording.suffix)
             output_png = recording.parent / (recording.stem + "_cleaned.png")
             _plot_tracks(recording, reference, cleaned, output_png)
+
+
+@app.command("retime")
+def retime(
+    recording: Path = typer.Option(
+        ...,
+        "--recording",
+        exists=True,
+        help="Path to the GPX recording",
+    ),
+    overwrite: bool = typer.Option(
+        False,
+        "--overwrite",
+        help="Overwrite the recording in place instead of creating a new file",
+    ),
+    plot: bool = typer.Option(
+        False,
+        "--plot",
+        help="(not supported for retime)",
+    ),
+) -> None:
+    """
+    Assign timestamps to track points that have none, based on their
+    distance from the surrounding timestamped points (constant-speed assumption).
+    """
+    if plot:
+        typer.echo(
+            "Error: --plot is not supported for retime (coordinates are unchanged).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    GPSRetimer(recording, overwrite).start()
 
 
 if __name__ == "__main__":

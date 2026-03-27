@@ -485,6 +485,161 @@ class GPSSampleRateReducer:
         print(f"Output written to: {output_path}")
 
 
+class GPSRetimer:
+    """
+    Assigns timestamps to track points that have none, based on their distance
+    from the surrounding timestamped anchor points (constant-speed assumption).
+
+    For each gap of points without <time>, the class computes cumulative Haversine
+    distances from the last timestamped point before the gap to the first after it.
+    Each point's timestamp is interpolated proportionally to its distance within
+    that segment. If all points in a segment are at the same location (total
+    distance is zero), timestamps are distributed evenly in time instead.
+
+    The first and last track points of the recording must have timestamps;
+    otherwise processing is aborted with an error message.
+
+    Usage:
+        retimer = GPSRetimer(recording, overwrite)
+        retimer.start()
+    """
+
+    def __init__(self, recording: Path, overwrite: bool = False) -> None:
+        """
+        Parameters
+        ----------
+        recording : Path
+            Path to the GPX file containing track points without timestamps.
+        overwrite : bool
+            If True, the original recording is overwritten in place.
+            If False (default), the result is written to a new file with the
+            suffix "_retimed" added before the file extension.
+        """
+        self._recording = recording
+        self._overwrite = overwrite
+
+    def start(self) -> None:
+        """
+        Run the retiming process:
+        1. Parse the recording GPX.
+        2. Verify the first and last track points have timestamps.
+        3. Find all gaps (consecutive runs of track points without <time>).
+        4. For each gap, interpolate timestamps from the surrounding anchors.
+        5. Write the result to a new file (or overwrite the original).
+        """
+        ET.register_namespace("", GPX_NAMESPACE)
+
+        tree = ET.parse(self._recording)
+        root = tree.getroot()
+
+        all_trkpts: list[ET.Element] = list(root.iter(f"{{{GPX_NAMESPACE}}}trkpt"))
+
+        if not all_trkpts:
+            print("No track points found.")
+            return
+
+        def has_time(trkpt: ET.Element) -> bool:
+            el = trkpt.find(f"{{{GPX_NAMESPACE}}}time")
+            return el is not None and el.text is not None
+
+        def get_time(trkpt: ET.Element) -> datetime:
+            el = trkpt.find(f"{{{GPX_NAMESPACE}}}time")
+            return datetime.fromisoformat(el.text.replace("Z", "+00:00"))
+
+        if not has_time(all_trkpts[0]):
+            print("Error: The first track point has no timestamp. Aborting.")
+            return
+
+        if not has_time(all_trkpts[-1]):
+            print("Error: The last track point has no timestamp. Aborting.")
+            return
+
+        # Identify all gaps: consecutive runs of track points without <time>
+        gaps: list[tuple[int, int]] = []  # (first_index, last_index) inclusive
+        i = 0
+        while i < len(all_trkpts):
+            if not has_time(all_trkpts[i]):
+                gap_start = i
+                while i < len(all_trkpts) and not has_time(all_trkpts[i]):
+                    i += 1
+                gaps.append((gap_start, i - 1))
+            else:
+                i += 1
+
+        if not gaps:
+            print("No track points without timestamps found.")
+            return
+
+        total_assigned = 0
+
+        for gap_start, gap_end in gaps:
+            anchor_start_pt = all_trkpts[gap_start - 1]
+            anchor_end_pt   = all_trkpts[gap_end + 1]
+
+            anchor_start_time = get_time(anchor_start_pt)
+            anchor_end_time   = get_time(anchor_end_pt)
+            time_span = anchor_end_time - anchor_start_time
+
+            # Build segment including both anchors for distance calculation
+            segment = (
+                [anchor_start_pt]
+                + all_trkpts[gap_start : gap_end + 1]
+                + [anchor_end_pt]
+            )
+
+            # Cumulative Haversine distances along the segment
+            cumulative: list[float] = [0.0]
+            for j in range(1, len(segment)):
+                prev_pt = segment[j - 1]
+                curr_pt = segment[j]
+                d = _haversine_distance(
+                    float(prev_pt.attrib["lat"]),
+                    float(prev_pt.attrib["lon"]),
+                    float(curr_pt.attrib["lat"]),
+                    float(curr_pt.attrib["lon"]),
+                )
+                cumulative.append(cumulative[-1] + d)
+
+            total_dist = cumulative[-1]
+            n_gap = gap_end - gap_start + 1
+
+            for i_gap, trkpt in enumerate(all_trkpts[gap_start : gap_end + 1]):
+                # In the segment array the gap points start at index 1
+                seg_idx = i_gap + 1
+
+                if total_dist == 0:
+                    # All points at the same location — distribute evenly in time
+                    fraction = (i_gap + 1) / (n_gap + 1)
+                else:
+                    fraction = cumulative[seg_idx] / total_dist
+
+                new_time = anchor_start_time + fraction * time_span
+
+                time_el = ET.Element(f"{{{GPX_NAMESPACE}}}time")
+                time_el.text = new_time.isoformat().replace("+00:00", "Z")
+
+                # Insert <time> after <ele> if present, otherwise at position 0
+                ele_el = trkpt.find(f"{{{GPX_NAMESPACE}}}ele")
+                if ele_el is not None:
+                    trkpt.insert(list(trkpt).index(ele_el) + 1, time_el)
+                else:
+                    trkpt.insert(0, time_el)
+
+            total_assigned += n_gap
+
+        if self._overwrite:
+            output_path = self._recording
+        else:
+            output_path = self._recording.parent / (
+                self._recording.stem + "_retimed" + self._recording.suffix
+            )
+
+        tree.write(output_path, xml_declaration=True, encoding="utf-8")
+
+        print(f"Done. {total_assigned} timestamps assigned.")
+        print(f"Output written to: {output_path}")
+
+
 def _parse_timed_trackpoints(
     gpx_file: Path,
 ) -> list[tuple[float, float, datetime]]:

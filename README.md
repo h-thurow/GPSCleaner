@@ -234,6 +234,43 @@ Timestamp (Reference)             Distance (m)   Timestamp (Original)
 
 A row with no match within `--max-time-diff` has empty distance and timestamp columns.
 
+### retime — Assign timestamps to points without one
+
+Some GPS tracks contain sections where track points have no timestamp. This happens,
+for example, when points are manually deleted in Garmin BaseCamp and replaced with
+new points drawn along the actual route. `retime` assigns timestamps to these
+points based on their distance from the surrounding timestamped points, assuming
+constant speed throughout each affected section.
+
+```
+python -m gpscleaner retime --recording FILE [--overwrite]
+```
+
+| Option        | Description |
+|---------------|-------------|
+| `--recording` | GPX file containing track points without timestamps |
+| `--overwrite` | Overwrite the recording in place instead of creating a new file (optional) |
+
+```bash
+python -m gpscleaner retime --recording /path/to/recording.gpx
+```
+
+The first and last track points of the recording must have timestamps; otherwise
+processing is aborted with an error message. If no points without timestamps are
+found, a message is printed and no output file is created.
+
+`--plot` is not supported (coordinates are not changed) and results in an error.
+
+Without `--overwrite`, the result is written next to the recording:
+
+```
+recording.gpx  →  recording_retimed.gpx
+```
+
+`--overwrite` is useful when `retime` needs to be applied to multiple sections of
+the same file in succession: run the command once per section, each time overwriting
+the result of the previous run.
+
 ## Plot
 
 With `--plot`, an additional PNG file is created. For track correction it shows the original recording (blue), reference route (green), and cleaned track (red). For sample rate reduction it shows the original (blue) and the reduced track (red).
