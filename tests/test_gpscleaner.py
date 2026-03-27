@@ -6,7 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from src.gpscleaner.cli import app
-from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSSampleRateReducer, _get_timestamp_by_coord, _get_timestamp_by_index, _interpolate_positions
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSSampleRateReducer, _get_timestamp_by_coord, _get_timestamp_by_index, _interpolate_positions, compare_tracks
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -150,7 +150,7 @@ class TestGPSSampleRateReducer:
 
     def test_sample_rate_with_start_raises_error(self):
         result = runner.invoke(app, [
-            "--orig", str(CAM_RECORDING),
+            "clean", "--recording", str(CAM_RECORDING),
             "--sample-rate", "1",
             "--start", "2026-01-03T11:48:46Z",
         ])
@@ -159,7 +159,7 @@ class TestGPSSampleRateReducer:
 
     def test_sample_rate_with_end_raises_error(self):
         result = runner.invoke(app, [
-            "--orig", str(CAM_RECORDING),
+            "clean", "--recording", str(CAM_RECORDING),
             "--sample-rate", "1",
             "--end", "2026-01-03T12:00:00Z",
         ])
@@ -168,7 +168,7 @@ class TestGPSSampleRateReducer:
 
     def test_sample_rate_with_reference_raises_error(self):
         result = runner.invoke(app, [
-            "--orig", str(CAM_RECORDING),
+            "clean", "--recording", str(CAM_RECORDING),
             "--sample-rate", "1",
             "--reference", str(TARGET),
         ])
@@ -187,7 +187,7 @@ class TestGPSCleanerByIndex:
 
     def test_output_file_is_created(self):
         runner.invoke(app, [
-            "--orig", str(CAM_RECORDING),
+            "clean", "--recording", str(CAM_RECORDING),
             "--start-point", "100",
             "--end-point", "200",
             "--reference", str(CAM_REFERENCE),
@@ -197,7 +197,7 @@ class TestGPSCleanerByIndex:
     def test_trackpoint_count_is_preserved(self):
         original_count = count_trackpoints(CAM_RECORDING)
         runner.invoke(app, [
-            "--orig", str(CAM_RECORDING),
+            "clean", "--recording", str(CAM_RECORDING),
             "--start-point", "100",
             "--end-point", "200",
             "--reference", str(CAM_REFERENCE),
@@ -210,7 +210,7 @@ class TestGPSCleanerByIndex:
         original_lats = [float(p.attrib["lat"]) for p in all_original[99:200]]
 
         runner.invoke(app, [
-            "--orig", str(CAM_RECORDING),
+            "clean", "--recording", str(CAM_RECORDING),
             "--start-point", "100",
             "--end-point", "200",
             "--reference", str(CAM_REFERENCE),
@@ -224,7 +224,7 @@ class TestGPSCleanerByIndex:
 
     def test_start_point_without_end_point_raises_error(self):
         result = runner.invoke(app, [
-            "--orig", str(CAM_RECORDING),
+            "clean", "--recording", str(CAM_RECORDING),
             "--start-point", "100",
             "--reference", str(CAM_REFERENCE),
         ])
@@ -233,7 +233,7 @@ class TestGPSCleanerByIndex:
 
     def test_start_point_with_start_time_raises_error(self):
         result = runner.invoke(app, [
-            "--orig", str(CAM_RECORDING),
+            "clean", "--recording", str(CAM_RECORDING),
             "--start-point", "100",
             "--end-point", "200",
             "--start", "2026-01-03T11:48:46Z",
@@ -243,7 +243,7 @@ class TestGPSCleanerByIndex:
 
     def test_invalid_index_zero_raises_error(self):
         result = runner.invoke(app, [
-            "--orig", str(CAM_RECORDING),
+            "clean", "--recording", str(CAM_RECORDING),
             "--start-point", "0",
             "--end-point", "200",
             "--reference", str(CAM_REFERENCE),
@@ -252,7 +252,7 @@ class TestGPSCleanerByIndex:
 
     def test_invalid_index_too_large_raises_error(self):
         result = runner.invoke(app, [
-            "--orig", str(CAM_RECORDING),
+            "clean", "--recording", str(CAM_RECORDING),
             "--start-point", "100",
             "--end-point", "999999",
             "--reference", str(CAM_REFERENCE),
@@ -331,7 +331,7 @@ class TestGPSDistanceReducer:
 
     def test_distance_with_start_raises_error(self):
         result = runner.invoke(app, [
-            "--orig", str(CAM_RECORDING),
+            "clean", "--recording", str(CAM_RECORDING),
             "--distance", "1",
             "--start", "2026-01-03T11:48:46Z",
         ])
@@ -340,7 +340,7 @@ class TestGPSDistanceReducer:
 
     def test_distance_with_sample_rate_raises_error(self):
         result = runner.invoke(app, [
-            "--orig", str(CAM_RECORDING),
+            "clean", "--recording", str(CAM_RECORDING),
             "--distance", "1",
             "--sample-rate", "1",
         ])
@@ -349,7 +349,7 @@ class TestGPSDistanceReducer:
 
     def test_distance_with_reference_raises_error(self):
         result = runner.invoke(app, [
-            "--orig", str(CAM_RECORDING),
+            "clean", "--recording", str(CAM_RECORDING),
             "--distance", "1",
             "--reference", str(TARGET),
         ])
@@ -358,7 +358,7 @@ class TestGPSDistanceReducer:
 
     def test_distance_with_start_coord_raises_error(self):
         result = runner.invoke(app, [
-            "--orig", str(CAM_RECORDING),
+            "clean", "--recording", str(CAM_RECORDING),
             "--distance", "1",
             "--start-coord", "45.0,9.0",
             "--end-coord", "45.1,9.1",
@@ -378,7 +378,7 @@ class TestGPSCleanerByCoord:
 
     def test_output_file_is_created(self):
         runner.invoke(app, [
-            "--orig", str(ZUCCO_RECORDING),
+            "clean", "--recording", str(ZUCCO_RECORDING),
             "--start-coord", ZUCCO_START_COORD,
             "--end-coord",   ZUCCO_END_COORD,
             "--reference",   str(ZUCCO_REFERENCE),
@@ -388,7 +388,7 @@ class TestGPSCleanerByCoord:
     def test_trackpoint_count_is_preserved(self):
         original_count = count_trackpoints(ZUCCO_RECORDING)
         runner.invoke(app, [
-            "--orig", str(ZUCCO_RECORDING),
+            "clean", "--recording", str(ZUCCO_RECORDING),
             "--start-coord", ZUCCO_START_COORD,
             "--end-coord",   ZUCCO_END_COORD,
             "--reference",   str(ZUCCO_REFERENCE),
@@ -397,7 +397,7 @@ class TestGPSCleanerByCoord:
 
     def test_start_coord_without_end_coord_raises_error(self):
         result = runner.invoke(app, [
-            "--orig",        str(ZUCCO_RECORDING),
+            "clean", "--recording",        str(ZUCCO_RECORDING),
             "--start-coord", ZUCCO_START_COORD,
             "--reference",   str(ZUCCO_REFERENCE),
         ])
@@ -406,7 +406,7 @@ class TestGPSCleanerByCoord:
 
     def test_start_coord_with_start_time_raises_error(self):
         result = runner.invoke(app, [
-            "--orig",        str(ZUCCO_RECORDING),
+            "clean", "--recording",        str(ZUCCO_RECORDING),
             "--start-coord", ZUCCO_START_COORD,
             "--end-coord",   ZUCCO_END_COORD,
             "--start",       "2026-01-01T00:00:00Z",
@@ -416,7 +416,7 @@ class TestGPSCleanerByCoord:
 
     def test_start_coord_with_start_point_raises_error(self):
         result = runner.invoke(app, [
-            "--orig",        str(ZUCCO_RECORDING),
+            "clean", "--recording",        str(ZUCCO_RECORDING),
             "--start-coord", ZUCCO_START_COORD,
             "--end-coord",   ZUCCO_END_COORD,
             "--start-point", "100",
@@ -426,7 +426,7 @@ class TestGPSCleanerByCoord:
 
     def test_invalid_coord_format_raises_error(self):
         result = runner.invoke(app, [
-            "--orig",        str(ZUCCO_RECORDING),
+            "clean", "--recording",        str(ZUCCO_RECORDING),
             "--start-coord", "not-a-coord",
             "--end-coord",   ZUCCO_END_COORD,
             "--reference",   str(ZUCCO_REFERENCE),
@@ -443,6 +443,62 @@ class TestGPSCleanerByCoord:
     def test_get_timestamp_by_coord_raises_on_unknown_coord(self):
         with pytest.raises(ValueError):
             _get_timestamp_by_coord(ZUCCO_RECORDING, 0.0, 0.0)
+
+
+class TestCompare:
+
+    def test_output_contains_header(self, capsys):
+        compare_tracks(RECORDING, RECORDING, max_time_diff=1.0, interval=60.0)
+        out = capsys.readouterr().out
+        assert "Timestamp (Reference)" in out
+        assert "Distance (m)" in out
+        assert "Timestamp (Original)" in out
+
+    def test_self_compare_has_zero_distance(self, capsys):
+        compare_tracks(RECORDING, RECORDING, max_time_diff=1.0, interval=60.0)
+        lines = capsys.readouterr().out.splitlines()
+        data_lines = [l for l in lines[1:] if l.strip()]
+        assert len(data_lines) > 0
+        assert all("0.00" in line for line in data_lines)
+
+    def test_interval_reduces_row_count(self, capsys):
+        compare_tracks(RECORDING, RECORDING, max_time_diff=1.0)
+        all_count = len([l for l in capsys.readouterr().out.splitlines() if l.strip()])
+
+        compare_tracks(RECORDING, RECORDING, max_time_diff=1.0, interval=60.0)
+        interval_count = len([l for l in capsys.readouterr().out.splitlines() if l.strip()])
+
+        assert interval_count < all_count
+
+    def test_no_match_leaves_distance_empty(self, capsys):
+        # ZUCCO (Dec 2025) and RECORDING (Mar 2026) have no overlapping timestamps;
+        # use a large interval to limit output to a few rows
+        compare_tracks(RECORDING, ZUCCO_RECORDING, max_time_diff=1.0, interval=3600.0)
+        lines = capsys.readouterr().out.splitlines()
+        data_lines = [l for l in lines[1:] if l.strip()]
+        assert len(data_lines) > 0
+        # Rows with no match contain only the timestamp — nothing after column 1
+        for line in data_lines:
+            assert line.rstrip() == line[:32].rstrip()
+
+    def test_cli_compare_produces_output(self):
+        result = runner.invoke(app, [
+            "compare",
+            "--recording", str(RECORDING),
+            "--reference", str(RECORDING),
+            "--max-time-diff", "1",
+            "--interval", "60",
+        ])
+        assert result.exit_code == 0
+        assert "Timestamp (Reference)" in result.output
+
+    def test_cli_missing_max_time_diff_raises_error(self):
+        result = runner.invoke(app, [
+            "compare",
+            "--recording", str(RECORDING),
+            "--reference", str(TARGET),
+        ])
+        assert result.exit_code != 0
 
 
 class TestInterpolatePositions:

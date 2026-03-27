@@ -4,7 +4,7 @@ from pathlib import Path
 
 import typer
 
-from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSSampleRateReducer, _get_timestamp_by_coord, _get_timestamp_by_index
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSSampleRateReducer, _get_timestamp_by_coord, _get_timestamp_by_index, compare_tracks
 
 app = typer.Typer(add_completion=False)
 
@@ -90,10 +90,43 @@ def _plot_tracks(
     print(f"Plot saved to: {output_png}")
 
 
-@app.command()
-def main(
-    orig: Path = typer.Option(
+@app.command("compare")
+def compare(
+    recording: Path = typer.Option(
         ...,
+        "--recording",
+        exists=True,
+        help="Path to the GPX recording",
+    ),
+    reference: Path = typer.Option(
+        ...,
+        "--reference",
+        exists=True,
+        help="Path to the reference GPX track",
+    ),
+    max_time_diff: float = typer.Option(
+        ...,
+        "--max-time-diff",
+        help="Maximum time difference in seconds between matched points (interpreted as ±)",
+    ),
+    interval: float | None = typer.Option(
+        None,
+        "--interval",
+        help="Check interval in seconds (optional; all reference points are compared if omitted)",
+    ),
+) -> None:
+    """
+    Compare two GPS tracks by matching points with similar timestamps and
+    printing their distances as an aligned table.
+    """
+    compare_tracks(recording, reference, max_time_diff, interval)
+
+
+@app.command("clean")
+def clean(
+    recording: Path = typer.Option(
+        ...,
+        "--recording",
         exists=True,
         help="Path to the GPX recording",
     ),
@@ -148,7 +181,7 @@ def main(
 ) -> None:
     """
     Clean a GPS recording by replacing deviating track points with positions
-    from a reference route, or reduce the recording's sample rate.
+    from a reference route, or reduce the recording's sample rate or point density.
     """
     using_coord = start_coord is not None or end_coord is not None
     using_index = start_point is not None or end_point is not None
@@ -159,35 +192,35 @@ def main(
             typer.echo(
                 "Error: --start, --end, --start-point, --end-point, --start-coord, --end-coord, "
                 "--reference, and --sample-rate cannot be used with --distance.\n"
-                "       When using --distance, only --orig and --plot are allowed.",
+                "       When using --distance, only --recording and --plot are allowed.",
                 err=True,
             )
             raise typer.Exit(code=1)
 
-        GPSDistanceReducer(orig, distance).start()
+        GPSDistanceReducer(recording, distance).start()
 
         if plot:
-            cleaned = orig.parent / (orig.stem + f"_distance={distance}" + orig.suffix)
+            cleaned = recording.parent / (recording.stem + f"_distance={distance}" + recording.suffix)
             if cleaned.exists():
-                output_png = orig.parent / (orig.stem + f"_distance={distance}.png")
-                _plot_tracks(orig, None, cleaned, output_png)
+                output_png = recording.parent / (recording.stem + f"_distance={distance}.png")
+                _plot_tracks(recording, None, cleaned, output_png)
 
     elif sample_rate is not None:
         if using_time or using_index or using_coord or reference is not None:
             typer.echo(
                 "Error: --start, --end, --start-point, --end-point, and --reference "
                 "cannot be used with --sample-rate.\n"
-                "       When using --sample-rate, only --orig and --plot are allowed.",
+                "       When using --sample-rate, only --recording and --plot are allowed.",
                 err=True,
             )
             raise typer.Exit(code=1)
 
-        GPSSampleRateReducer(orig, sample_rate).start()
+        GPSSampleRateReducer(recording, sample_rate).start()
 
         if plot:
-            cleaned = orig.parent / (orig.stem + f"_sample-rate={sample_rate}" + orig.suffix)
-            output_png = orig.parent / (orig.stem + f"_sample-rate={sample_rate}.png")
-            _plot_tracks(orig, None, cleaned, output_png)
+            cleaned = recording.parent / (recording.stem + f"_sample-rate={sample_rate}" + recording.suffix)
+            output_png = recording.parent / (recording.stem + f"_sample-rate={sample_rate}.png")
+            _plot_tracks(recording, None, cleaned, output_png)
 
     elif using_coord:
         if using_time or using_index:
@@ -220,8 +253,8 @@ def main(
         ec_lat, ec_lon = _parse_coord(end_coord, "end-coord")
 
         try:
-            start_time = _get_timestamp_by_coord(orig, sc_lat, sc_lon)
-            end_time   = _get_timestamp_by_coord(orig, ec_lat, ec_lon)
+            start_time = _get_timestamp_by_coord(recording, sc_lat, sc_lon)
+            end_time   = _get_timestamp_by_coord(recording, ec_lat, ec_lon)
         except ValueError as error:
             typer.echo(f"Error: {error}", err=True)
             raise typer.Exit(code=1)
@@ -229,14 +262,14 @@ def main(
         GPSCleaner(
             start_time=start_time,
             end_time=end_time,
-            recording=orig,
+            recording=recording,
             target=reference,
         ).start()
 
         if plot:
-            cleaned = orig.parent / (orig.stem + "_cleaned" + orig.suffix)
-            output_png = orig.parent / (orig.stem + "_cleaned.png")
-            _plot_tracks(orig, reference, cleaned, output_png)
+            cleaned = recording.parent / (recording.stem + "_cleaned" + recording.suffix)
+            output_png = recording.parent / (recording.stem + "_cleaned.png")
+            _plot_tracks(recording, reference, cleaned, output_png)
 
     elif using_index:
         if using_time:
@@ -265,8 +298,8 @@ def main(
             raise typer.Exit(code=1)
 
         try:
-            start_time = _get_timestamp_by_index(orig, start_point)
-            end_time   = _get_timestamp_by_index(orig, end_point)
+            start_time = _get_timestamp_by_index(recording, start_point)
+            end_time   = _get_timestamp_by_index(recording, end_point)
         except ValueError as error:
             typer.echo(f"Error: {error}", err=True)
             raise typer.Exit(code=1)
@@ -274,14 +307,14 @@ def main(
         GPSCleaner(
             start_time=start_time,
             end_time=end_time,
-            recording=orig,
+            recording=recording,
             target=reference,
         ).start()
 
         if plot:
-            cleaned = orig.parent / (orig.stem + "_cleaned" + orig.suffix)
-            output_png = orig.parent / (orig.stem + "_cleaned.png")
-            _plot_tracks(orig, reference, cleaned, output_png)
+            cleaned = recording.parent / (recording.stem + "_cleaned" + recording.suffix)
+            output_png = recording.parent / (recording.stem + "_cleaned.png")
+            _plot_tracks(recording, reference, cleaned, output_png)
 
     else:
         missing = [
@@ -302,14 +335,14 @@ def main(
         GPSCleaner(
             start_time=start_time,
             end_time=end_time,
-            recording=orig,
+            recording=recording,
             target=reference,
         ).start()
 
         if plot:
-            cleaned = orig.parent / (orig.stem + "_cleaned" + orig.suffix)
-            output_png = orig.parent / (orig.stem + "_cleaned.png")
-            _plot_tracks(orig, reference, cleaned, output_png)
+            cleaned = recording.parent / (recording.stem + "_cleaned" + recording.suffix)
+            output_png = recording.parent / (recording.stem + "_cleaned.png")
+            _plot_tracks(recording, reference, cleaned, output_png)
 
 
 if __name__ == "__main__":

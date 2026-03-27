@@ -1,6 +1,6 @@
 import math
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # The XML namespace used in GPX 1.1 files
@@ -483,3 +483,104 @@ class GPSSampleRateReducer:
 
         print(f"Done. {len(all_trkpts)} track points reduced to {len(kept_trkpts)}.")
         print(f"Output written to: {output_path}")
+
+
+def _parse_timed_trackpoints(
+    gpx_file: Path,
+) -> list[tuple[float, float, datetime]]:
+    """Return a list of (lat, lon, datetime) for all track points with a <time> element."""
+    root = ET.parse(gpx_file).getroot()
+    result: list[tuple[float, float, datetime]] = []
+    for trkpt in root.iter(f"{{{GPX_NAMESPACE}}}trkpt"):
+        time_el = trkpt.find(f"{{{GPX_NAMESPACE}}}time")
+        if time_el is not None and time_el.text is not None:
+            result.append((
+                float(trkpt.attrib["lat"]),
+                float(trkpt.attrib["lon"]),
+                datetime.fromisoformat(time_el.text.replace("Z", "+00:00")),
+            ))
+    return result
+
+
+def compare_tracks(
+    recording: Path,
+    reference: Path,
+    max_time_diff: float,
+    interval: float | None = None,
+) -> None:
+    """
+    Compare two GPS tracks by matching points with similar timestamps and
+    printing their distances as an aligned table to stdout.
+
+    For each reference point (or each interval step when interval is given),
+    the recording point with the smallest time difference within max_time_diff
+    is found. The distance between the two points is computed using the
+    Haversine formula. Rows with no match within the tolerance have empty
+    distance and timestamp (original) columns.
+
+    Parameters
+    ----------
+    recording : Path
+        The GPS recording to compare against the reference.
+    reference : Path
+        The reference GPS track that drives the comparison.
+    max_time_diff : float
+        Maximum allowed time difference in seconds (interpreted as ±).
+    interval : float | None
+        If given, check every this many seconds starting from the first
+        reference timestamp; otherwise every reference point is compared.
+    """
+    ref_pts = _parse_timed_trackpoints(reference)
+    rec_pts = _parse_timed_trackpoints(recording)
+
+    if not ref_pts:
+        print("Reference track contains no timed track points.")
+        return
+    if not rec_pts:
+        print("Recording contains no timed track points.")
+        return
+
+    # Determine which reference points serve as check points
+    if interval is None:
+        check_pts = ref_pts
+    else:
+        check_pts = []
+        t = ref_pts[0][2]
+        end_time = ref_pts[-1][2]
+        while t <= end_time + timedelta(seconds=interval / 2):
+            nearest = min(ref_pts, key=lambda p: abs((p[2] - t).total_seconds()))
+            check_pts.append(nearest)
+            t += timedelta(seconds=interval)
+
+    # Table column widths — TS_WIDTH=32 accommodates microsecond precision timestamps
+    TS_WIDTH = 32
+    DIST_WIDTH = 12
+    SEP = "   "
+
+    print(
+        f"{'Timestamp (Reference)':<{TS_WIDTH}}{SEP}"
+        f"{'Distance (m)':>{DIST_WIDTH}}{SEP}"
+        f"Timestamp (Original)"
+    )
+
+    for ref_lat, ref_lon, ref_time in check_pts:
+        # Find the recording point with the smallest time difference within tolerance
+        best_match: tuple[float, float, datetime] | None = None
+        best_diff = float("inf")
+        for rec_lat, rec_lon, rec_time in rec_pts:
+            diff = abs((rec_time - ref_time).total_seconds())
+            if diff <= max_time_diff and diff < best_diff:
+                best_diff = diff
+                best_match = (rec_lat, rec_lon, rec_time)
+
+        ts_ref = ref_time.isoformat()
+        if best_match is not None:
+            rec_lat, rec_lon, rec_time = best_match
+            dist = _haversine_distance(ref_lat, ref_lon, rec_lat, rec_lon)
+            print(
+                f"{ts_ref:<{TS_WIDTH}}{SEP}"
+                f"{dist:>{DIST_WIDTH}.2f}{SEP}"
+                f"{rec_time.isoformat()}"
+            )
+        else:
+            print(f"{ts_ref:<{TS_WIDTH}}")

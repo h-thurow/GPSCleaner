@@ -15,7 +15,7 @@
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
     <option name="SCRIPT_NAME" value="gpscleaner" />
-    <option name="PARAMETERS" value="--start 2026-03-22T15:06:08Z --end 2026-03-22T15:30:50Z --orig tests/fixtures/260322-recording-garmin.connect-export.gpx --reference tests/fixtures/260322-reference.GPX --plot" />
+    <option name="PARAMETERS" value="clean --start 2026-03-22T15:06:08Z --end 2026-03-22T15:30:50Z --recording tests/fixtures/260322-recording-garmin.connect-export.gpx --reference tests/fixtures/260322-reference.GPX --plot" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="false" />
     <option name="MODULE_MODE" value="true" />
