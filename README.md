@@ -34,7 +34,7 @@ The points in the highlighted sections will be removed (again in Garmin BaseCamp
 
 ![](readme_resources/retime_deleted_selected_points.png)
 
-The actual route is reconstructed by adding new points:
+The actual route is reconstructed by adding new points through dragging:
 
 ![](readme_resources/retime_actual_route_reconstructed.png)
 
