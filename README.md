@@ -38,7 +38,7 @@ The actual route is reconstructed by adding new points through dragging:
 
 ![](readme_resources/retime_actual_route_reconstructed.png)
 
-After exporting the modified route as a GPS file, the points are timestamped using `retime`:
+After exporting the modified route as a GPX file, the points are timestamped using `retime`:
 
 ![](readme_resources/retimed.png)
 
