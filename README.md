@@ -86,7 +86,7 @@ Alternatively, without activating the environment:
 
 ## Usage
 
-GPSCleaner provides two subcommands: `clean` and `compare`.
+GPSCleaner provides three subcommands: `clean`, `compare` and `retime`.
 
 ### clean — Correct or reduce a track
 
