@@ -1,8 +1,10 @@
 # GPSCleaner
 
-Corrects GPS recordings where track points deviate from the actual route during a given time window. The affected points are replaced by positions evenly distributed along a reference route. The original file is left unchanged; the result is written to a new file. Also, you can reduce sample rate and point density by distance, and compare two tracks to measure deviations over time.
+Corrects GPS recordings where track points deviate from the actual route during a given time window. The affected points are replaced by positions evenly distributed along the actual route. The original file is left unchanged; the result is written to a new file. Also, you can reduce sample rate and point density by distance, and compare two tracks to measure deviations over time.
 
 ## Example
+
+### With clean
 
 The highlighted section of the GPS track is intended to follow the actual route, which can be seen in magenta in the background:
 
@@ -17,13 +19,38 @@ Create and export a GPS track of the actual route:
 
 ![](readme_resources/reference_path.png)
 
-The GPS track must correspond exactly to the section that is to serve as a reference for all original positions from the start to the end time. The original GPS points are evenly distributed along this track.
+The GPS track must correspond to the section that is to serve as a reference for all original positions from the start to the end time. The original GPS points are evenly distributed along this track.
 
 And here is the corrected section:
 
 ![](readme_resources/cleaned.png)
 
-Of course, the result is only an estimate, but the more evenly the route was covered, the more accurate it will be. It should not include interruptions such as breaks or red lights. Nor should it include U-turns, where the route suddenly heads back in the opposite direction.
+
+### With retime
+
+The points in the highlighted sections will be removed (again in Garmin BaseCamp):
+
+![](readme_resources/retime_delete_selected_points.png)
+
+![](readme_resources/retime_deleted_selected_points.png)
+
+The actual route is reconstructed by adding new points:
+
+![](readme_resources/retime_actual_route_reconstructed.png)
+
+After exporting the modified route as a GPS file, the points are timestamped using `retime`:
+
+![](readme_resources/retimed.png)
+
+Or, using `retime --sample-rate 1`, additional points are added at the recording’s sample rate:
+
+![](readme_resources/retimed_with_sample_rate.png)
+
+
+## Restrictions
+
+Of course, the result is only an estimate, but the more evenly (constant speed) the route was covered, the more accurate it will be. It should not include interruptions such as breaks or red lights. It is equally important that the start and end points of the sections to be corrected are actually located where you were at that time, and not simply the result of an inaccurate measurement. Time-lapse photos or video footage containing a feature that allows their position on the map to be clearly identified can be helpful. In the GPS track, the point with the same timestamp as the photo or frame can then be moved to the correct position in, for example, Garmin BaseCamp, and serve as the start or end point of a section.
+
 
 ## Requirements
 
