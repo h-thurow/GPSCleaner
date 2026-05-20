@@ -2,6 +2,8 @@
 
 Corrects GPS recordings where track points deviate from the actual route during a given time window. The affected points are replaced by positions evenly distributed along the actual route. The original file is left unchanged; the result is written to a new file. Also, you can reduce sample rate and point density by distance, and compare two tracks to measure deviations over time.
 
+The project was vibe coded with Claude.
+
 ## Example
 
 ### With clean
