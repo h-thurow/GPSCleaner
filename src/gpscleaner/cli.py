@@ -1,10 +1,11 @@
+import re
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import typer
 
-from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSRetimer, GPSSampleRateResampler, GPSSampleRateUpsampler, _get_timestamp_by_coord, _get_timestamp_by_index, compare_tracks
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSRetimer, GPSSampleRateResampler, GPSSampleRateUpsampler, GPSTimeShifter, _get_timestamp_by_coord, _get_timestamp_by_index, compare_tracks
 
 app = typer.Typer(add_completion=False)
 
@@ -38,6 +39,27 @@ def _parse_datetime(value: str, option_name: str) -> datetime:
             f"'{value}' is not a valid date/time. Expected format: 2026-03-22T13:10:00Z",
             param_hint=f"'--{option_name}'",
         )
+
+
+def _parse_shift_time(value: str) -> timedelta:
+    """
+    Parse a time-shift string like +1h30m, -2h, +45s, +1h2m13s.
+    At least one of h/m/s must be present. Returns a timedelta.
+    Raises typer.BadParameter on invalid input.
+    """
+    m = re.fullmatch(r"([+-]?)(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", value.strip())
+    if not m or not any(m.group(i) for i in range(2, 5)):
+        raise typer.BadParameter(
+            f"'{value}' is not a valid time shift. "
+            "Expected format: [+|-]<value>[h][m][s], e.g. +1h30m, -45s, +2h13s",
+            param_hint="'--shift-time'",
+        )
+    delta = timedelta(
+        hours=int(m.group(2) or 0),
+        minutes=int(m.group(3) or 0),
+        seconds=int(m.group(4) or 0),
+    )
+    return -delta if m.group(1) == "-" else delta
 
 
 def _extract_coords(gpx_file: Path) -> tuple[list[float], list[float]]:
@@ -379,6 +401,11 @@ def retime(
         "--sample-rate",
         help="Insert additional points in gap sections to reach this sample rate (positions/second)",
     ),
+    shift_time: str | None = typer.Option(
+        None,
+        "--shift-time",
+        help="Shift all timestamps by this amount, e.g. +1h30m, -45s, +2h13s",
+    ),
     plot: bool = typer.Option(
         False,
         "--plot",
@@ -389,6 +416,7 @@ def retime(
     Assign timestamps to track points that have none, based on their
     distance from the surrounding timestamped points (constant-speed assumption).
     Optionally insert additional interpolated points to reach a target sample rate.
+    Or shift all existing timestamps by a fixed offset with --shift-time.
     """
     if plot:
         typer.echo(
@@ -396,7 +424,18 @@ def retime(
             err=True,
         )
         raise typer.Exit(code=1)
-    GPSRetimer(recording, overwrite, sample_rate).start()
+
+    if shift_time is not None:
+        if sample_rate is not None:
+            typer.echo(
+                "Error: --shift-time and --sample-rate cannot be combined.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        delta = _parse_shift_time(shift_time)
+        GPSTimeShifter(recording, delta, overwrite).start()
+    else:
+        GPSRetimer(recording, overwrite, sample_rate).start()
 
 
 if __name__ == "__main__":

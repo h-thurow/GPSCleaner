@@ -1,6 +1,6 @@
 # Correct GPS recordings (GPX files) where track points deviate from the actual route
 
-Corrects GPS recordings where track points deviate from the actual route during a given time window. The affected points are replaced by positions evenly distributed along the actual route. The original file is left unchanged; the result is written to a new file. Also, you can change the sample rate (reduce or increase by interpolation) and point density by distance, and compare two tracks to measure deviations over time.
+Corrects GPS recordings where track points deviate from the actual route during a given time window. The affected points are replaced by positions evenly distributed along the actual route. The original file is left unchanged; the result is written to a new file. Also, you can change the sample rate (reduce or increase by interpolation) and point density by distance, assign timestamps to points that have none, shift all timestamps by a fixed offset, and compare two tracks to measure deviations over time.
 
 The project was vibe coded with Claude.
 
@@ -88,7 +88,7 @@ Alternatively, without activating the environment:
 
 ## Usage
 
-GPSCleaner provides three subcommands: `clean`, `compare` and `retime`.
+GPSCleaner provides three subcommands: `clean`, `retime` and `compare`.
 
 ### clean — Correct or resample a track
 
@@ -239,7 +239,11 @@ recording.gpx  →  recording_cleaned.gpx              (track correction)
                →  recording_distance=3.0.gpx          (--distance 3)
 ```
 
-### retime — Assign timestamps to points without one
+### retime — Assign timestamps to points without one, or shift all timestamps
+
+`retime` operates in two independent modes selected by which options are given.
+
+#### Assign timestamps to gap points
 
 Some GPS tracks contain sections where track points have no timestamp. This happens,
 for example, when points are manually deleted in Garmin BaseCamp and replaced with
@@ -272,8 +276,6 @@ linear interpolation of position and evenly spaced timestamps. Existing gap poin
 are always kept. If the time between two consecutive gap points is already shorter
 than 1/RATE seconds, no new points are inserted between them.
 
-`--plot` is not supported (coordinates are not changed) and results in an error.
-
 Without `--overwrite`, the result is written next to the recording:
 
 ```
@@ -283,6 +285,52 @@ recording.gpx  →  recording_retimed.gpx
 `--overwrite` is useful when `retime` needs to be applied to multiple sections of
 the same file in succession: run the command once per section, each time overwriting
 the result of the previous run.
+
+#### Shift all timestamps by a fixed offset
+
+Use `--shift-time` to move every timestamp in a recording forward or backward by the
+same amount. This is useful when a GPS device had the wrong time set (e.g. wrong
+timezone or a clock that was not synchronised), so all timestamps are off by the
+same constant delta.
+
+```
+python -m gpscleaner retime --recording FILE --shift-time OFFSET [--overwrite]
+```
+
+| Option          | Description |
+|-----------------|-------------|
+| `--recording`   | GPX file whose timestamps should be shifted |
+| `--shift-time`  | Amount to shift, e.g. `+1h`, `-30m`, `+2h13s`, `+1h2m13s` |
+| `--overwrite`   | Overwrite the recording in place instead of creating a new file (optional) |
+
+The offset format is `[+\|-]<value>[h][m][s]`. At least one of `h`, `m`, `s` must
+be present. A `+` prefix (or no prefix) shifts forward in time; `-` shifts backward.
+
+```bash
+# GPS clock was 2 hours ahead — shift all timestamps back by 2 hours
+python -m gpscleaner retime --recording /path/to/recording.gpx --shift-time -2h
+
+# Clock was 1 hour 30 minutes behind — shift forward
+python -m gpscleaner retime --recording /path/to/recording.gpx --shift-time +1h30m
+
+# Shift by 2 hours, 13 minutes and 7 seconds, overwriting the original
+python -m gpscleaner retime --recording /path/to/recording.gpx --shift-time +2h13m7s --overwrite
+```
+
+Track points without a `<time>` element are left unchanged. If no timestamped
+points are found, a message is printed and no output file is created.
+
+Without `--overwrite`, the result is written next to the recording:
+
+```
+recording.gpx  →  recording_shifted.gpx
+```
+
+`--shift-time` cannot be combined with `--sample-rate`.
+
+#### Notes on --plot
+
+`--plot` is not supported by `retime` (coordinates are not changed) and results in an error.
 
 ### compare — Measure deviations between two tracks
 

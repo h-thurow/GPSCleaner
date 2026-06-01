@@ -6,7 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from src.gpscleaner.cli import app
-from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSRetimer, GPSSampleRateReducer, GPSSampleRateResampler, GPSSampleRateUpsampler, _get_timestamp_by_coord, _get_timestamp_by_index, _haversine_distance, _interpolate_positions, compare_tracks
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSRetimer, GPSSampleRateReducer, GPSSampleRateResampler, GPSSampleRateUpsampler, GPSTimeShifter, _get_timestamp_by_coord, _get_timestamp_by_index, _haversine_distance, _interpolate_positions, compare_tracks
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -969,6 +969,124 @@ class TestGPSRetimer:
             "--sample-rate", "0.1",
         ])
         assert result.exit_code == 0
+
+
+class TestGPSTimeShifter:
+
+    def _make_gpx(self, tmp_path, timestamps: list[str]) -> Path:
+        trkpts = "".join(
+            f'<trkpt lat="47.0" lon="9.0"><time>{ts}</time></trkpt>'
+            for ts in timestamps
+        )
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            f"<trk><trkseg>{trkpts}</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "test.gpx"
+        gpx_file.write_text(gpx)
+        return gpx_file
+
+    def test_output_file_is_created(self, tmp_path):
+        gpx_file = self._make_gpx(tmp_path, ["2026-01-01T10:00:00Z"])
+        GPSTimeShifter(gpx_file, timedelta(minutes=5)).start()
+        assert (tmp_path / "test_shifted.gpx").exists()
+
+    def test_original_file_is_not_modified(self, tmp_path):
+        gpx_file = self._make_gpx(tmp_path, ["2026-01-01T10:00:00Z"])
+        original_bytes = gpx_file.read_bytes()
+        GPSTimeShifter(gpx_file, timedelta(minutes=5)).start()
+        assert gpx_file.read_bytes() == original_bytes
+
+    def test_timestamps_shifted_forward(self, tmp_path):
+        gpx_file = self._make_gpx(tmp_path, ["2026-01-01T10:00:00Z", "2026-01-01T10:00:10Z"])
+        GPSTimeShifter(gpx_file, timedelta(hours=1, minutes=30)).start()
+        root = ET.parse(tmp_path / "test_shifted.gpx").getroot()
+        times = [
+            datetime.fromisoformat(el.text.replace("Z", "+00:00"))
+            for el in root.iter(f"{{{GPX_NS}}}time")
+        ]
+        assert times[0] == datetime(2026, 1, 1, 11, 30, 0, tzinfo=timezone.utc)
+        assert times[1] == datetime(2026, 1, 1, 11, 30, 10, tzinfo=timezone.utc)
+
+    def test_timestamps_shifted_backward(self, tmp_path):
+        gpx_file = self._make_gpx(tmp_path, ["2026-01-01T10:00:00Z", "2026-01-01T10:00:10Z"])
+        GPSTimeShifter(gpx_file, timedelta(hours=-1)).start()
+        root = ET.parse(tmp_path / "test_shifted.gpx").getroot()
+        times = [
+            datetime.fromisoformat(el.text.replace("Z", "+00:00"))
+            for el in root.iter(f"{{{GPX_NS}}}time")
+        ]
+        assert times[0] == datetime(2026, 1, 1, 9, 0, 0, tzinfo=timezone.utc)
+        assert times[1] == datetime(2026, 1, 1, 9, 0, 10, tzinfo=timezone.utc)
+
+    def test_overwrite_modifies_original(self, tmp_path):
+        gpx_file = self._make_gpx(tmp_path, ["2026-01-01T10:00:00Z"])
+        original_bytes = gpx_file.read_bytes()
+        GPSTimeShifter(gpx_file, timedelta(minutes=5), overwrite=True).start()
+        assert gpx_file.read_bytes() != original_bytes
+        assert not (tmp_path / "test_shifted.gpx").exists()
+
+    def test_no_timestamps_prints_message(self, capsys, tmp_path):
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><trkseg>"
+            '<trkpt lat="47.0" lon="9.0"/>'
+            "</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "no_times.gpx"
+        gpx_file.write_text(gpx)
+        GPSTimeShifter(gpx_file, timedelta(hours=1)).start()
+        captured = capsys.readouterr()
+        assert "Nothing to do" in captured.out
+        assert not (tmp_path / "no_times_shifted.gpx").exists()
+
+    def test_cli_shift_time_forward(self, tmp_path):
+        gpx_file = self._make_gpx(tmp_path, ["2026-01-01T10:00:00Z"])
+        result = runner.invoke(app, ["retime", "--recording", str(gpx_file), "--shift-time", "+1h"])
+        assert result.exit_code == 0
+        assert (tmp_path / "test_shifted.gpx").exists()
+
+    def test_cli_shift_time_backward(self, tmp_path):
+        gpx_file = self._make_gpx(tmp_path, ["2026-01-01T10:00:00Z"])
+        result = runner.invoke(app, ["retime", "--recording", str(gpx_file), "--shift-time", "-30m"])
+        assert result.exit_code == 0
+        root = ET.parse(tmp_path / "test_shifted.gpx").getroot()
+        time_el = next(root.iter(f"{{{GPX_NS}}}time"))
+        t = datetime.fromisoformat(time_el.text.replace("Z", "+00:00"))
+        assert t == datetime(2026, 1, 1, 9, 30, 0, tzinfo=timezone.utc)
+
+    def test_cli_shift_time_combined_format(self, tmp_path):
+        gpx_file = self._make_gpx(tmp_path, ["2026-01-01T10:00:00Z"])
+        result = runner.invoke(app, ["retime", "--recording", str(gpx_file), "--shift-time", "+1h2m13s"])
+        assert result.exit_code == 0
+        root = ET.parse(tmp_path / "test_shifted.gpx").getroot()
+        time_el = next(root.iter(f"{{{GPX_NS}}}time"))
+        t = datetime.fromisoformat(time_el.text.replace("Z", "+00:00"))
+        assert t == datetime(2026, 1, 1, 11, 2, 13, tzinfo=timezone.utc)
+
+    def test_cli_shift_time_with_sample_rate_raises_error(self, tmp_path):
+        gpx_file = self._make_gpx(tmp_path, ["2026-01-01T10:00:00Z"])
+        result = runner.invoke(app, [
+            "retime", "--recording", str(gpx_file),
+            "--shift-time", "+1h", "--sample-rate", "1",
+        ])
+        assert result.exit_code != 0
+
+    def test_cli_invalid_shift_time_raises_error(self, tmp_path):
+        gpx_file = self._make_gpx(tmp_path, ["2026-01-01T10:00:00Z"])
+        result = runner.invoke(app, [
+            "retime", "--recording", str(gpx_file), "--shift-time", "invalid",
+        ])
+        assert result.exit_code != 0
+
+    def test_cli_shift_time_only_sign_raises_error(self, tmp_path):
+        gpx_file = self._make_gpx(tmp_path, ["2026-01-01T10:00:00Z"])
+        result = runner.invoke(app, [
+            "retime", "--recording", str(gpx_file), "--shift-time", "+",
+        ])
+        assert result.exit_code != 0
 
 
 class TestInterpolatePositions:

@@ -1007,6 +1007,78 @@ class GPSRetimer:
         return result
 
 
+class GPSTimeShifter:
+    """
+    Shifts all timestamps in a GPS recording by a constant timedelta.
+
+    Every track point that carries a <time> element is adjusted by the same
+    offset; points without a <time> element are left unchanged.
+
+    Usage:
+        shifter = GPSTimeShifter(recording, shift)
+        shifter.start()
+    """
+
+    def __init__(
+        self,
+        recording: Path,
+        shift: timedelta,
+        overwrite: bool = False,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        recording : Path
+            Path to the GPX file whose timestamps should be shifted.
+        shift : timedelta
+            Amount to add to every timestamp. Use a negative value to shift
+            backward in time.
+        overwrite : bool
+            If True, the original recording is overwritten in place.
+            If False (default), the result is written to a new file with the
+            suffix "_shifted" added before the file extension.
+        """
+        self._recording = recording
+        self._shift = shift
+        self._overwrite = overwrite
+
+    def start(self) -> None:
+        """
+        Run the time-shift:
+        1. Parse the recording GPX.
+        2. Add self._shift to every <time> element found in track points.
+        3. Write the result to a new file (or overwrite the original).
+        """
+        ET.register_namespace("", GPX_NAMESPACE)
+
+        tree = ET.parse(self._recording)
+        root = tree.getroot()
+
+        count = 0
+        for trkpt in root.iter(f"{{{GPX_NAMESPACE}}}trkpt"):
+            time_el = trkpt.find(f"{{{GPX_NAMESPACE}}}time")
+            if time_el is not None and time_el.text is not None:
+                t = datetime.fromisoformat(time_el.text.replace("Z", "+00:00"))
+                time_el.text = (t + self._shift).isoformat().replace("+00:00", "Z")
+                count += 1
+
+        if count == 0:
+            print("No track points with timestamps found. Nothing to do.")
+            return
+
+        if self._overwrite:
+            output_path = self._recording
+        else:
+            output_path = self._recording.parent / (
+                self._recording.stem + "_shifted" + self._recording.suffix
+            )
+
+        tree.write(output_path, xml_declaration=True, encoding="utf-8")
+
+        print(f"Done. {count} timestamps shifted by {self._shift}.")
+        print(f"Output written to: {output_path}")
+
+
 def _parse_timed_trackpoints(
     gpx_file: Path,
 ) -> list[tuple[float, float, datetime]]:
