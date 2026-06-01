@@ -4,7 +4,7 @@ from pathlib import Path
 
 import typer
 
-from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSRetimer, GPSSampleRateReducer, _get_timestamp_by_coord, _get_timestamp_by_index, compare_tracks
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSRetimer, GPSSampleRateResampler, GPSSampleRateUpsampler, _get_timestamp_by_coord, _get_timestamp_by_index, compare_tracks
 
 app = typer.Typer(add_completion=False)
 
@@ -166,7 +166,13 @@ def clean(
     sample_rate: float | None = typer.Option(
         None,
         "--sample-rate",
-        help="Reduce track to this many positions per second (e.g. 0.2 for one every 5 s)",
+        help="Resample track to this many positions per second (e.g. 0.2 for one every 5 s)",
+    ),
+    upsample_only: bool = typer.Option(
+        False,
+        "--upsample-only",
+        help="With --sample-rate: only insert points in sparse gaps, never remove dense points. "
+             "Useful for geotagging photos from a track with adaptive sampling.",
     ),
     distance: float | None = typer.Option(
         None,
@@ -181,17 +187,24 @@ def clean(
 ) -> None:
     """
     Clean a GPS recording by replacing deviating track points with positions
-    from a reference route, or reduce the recording's sample rate or point density.
+    from a reference route, or resample the recording's sample rate or point density.
     """
     using_coord = start_coord is not None or end_coord is not None
     using_index = start_point is not None or end_point is not None
     using_time  = start       is not None or end       is not None
 
+    if upsample_only and sample_rate is None:
+        typer.echo(
+            "Error: --upsample-only requires --sample-rate.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
     if distance is not None:
-        if using_time or using_index or using_coord or reference is not None or sample_rate is not None:
+        if using_time or using_index or using_coord or reference is not None or sample_rate is not None or upsample_only:
             typer.echo(
                 "Error: --start, --end, --start-point, --end-point, --start-coord, --end-coord, "
-                "--reference, and --sample-rate cannot be used with --distance.\n"
+                "--reference, --sample-rate, and --upsample-only cannot be used with --distance.\n"
                 "       When using --distance, only --recording and --plot are allowed.",
                 err=True,
             )
@@ -210,12 +223,15 @@ def clean(
             typer.echo(
                 "Error: --start, --end, --start-point, --end-point, and --reference "
                 "cannot be used with --sample-rate.\n"
-                "       When using --sample-rate, only --recording and --plot are allowed.",
+                "       When using --sample-rate, only --recording, --upsample-only, and --plot are allowed.",
                 err=True,
             )
             raise typer.Exit(code=1)
 
-        GPSSampleRateReducer(recording, sample_rate).start()
+        if upsample_only:
+            GPSSampleRateUpsampler(recording, sample_rate).start()
+        else:
+            GPSSampleRateResampler(recording, sample_rate).start()
 
         if plot:
             cleaned = recording.parent / (recording.stem + f"_sample-rate={sample_rate}" + recording.suffix)

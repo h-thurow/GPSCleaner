@@ -1,12 +1,12 @@
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from src.gpscleaner.cli import app
-from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSRetimer, GPSSampleRateReducer, _get_timestamp_by_coord, _get_timestamp_by_index, _haversine_distance, _interpolate_positions, compare_tracks
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSRetimer, GPSSampleRateReducer, GPSSampleRateResampler, GPSSampleRateUpsampler, _get_timestamp_by_coord, _get_timestamp_by_index, _haversine_distance, _interpolate_positions, compare_tracks
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -145,7 +145,7 @@ class TestGPSSampleRateReducer:
         assert reduced_count < original_count / 10
 
     def test_hint_when_sample_rate_cannot_be_reduced(self, capsys):
-        # 260322-recording.GPX has ~1 position/second; requesting 2/s is impossible
+        # 260322-recording.GPX has ~1 position/second; requesting 2/s is impossible for the reducer
         GPSSampleRateReducer(RECORDING, 2.0).start()
         captured = capsys.readouterr()
         assert "Cannot reduce" in captured.out
@@ -177,6 +177,238 @@ class TestGPSSampleRateReducer:
         ])
         assert result.exit_code != 0
         assert "--sample-rate" in result.output
+
+
+class TestGPSSampleRateUpsampler:
+
+    @pytest.fixture(autouse=True)
+    def cleanup_upsampled_output(self):
+        """Remove upsampled output files before and after each test."""
+        for f in FIXTURES_DIR.glob("260322-recording_sample-rate=*.GPX"):
+            f.unlink()
+        yield
+        for f in FIXTURES_DIR.glob("260322-recording_sample-rate=*.GPX"):
+            f.unlink()
+
+    def recording_upsample_output(self, rate: float) -> Path:
+        return FIXTURES_DIR / f"260322-recording_sample-rate={rate}.GPX"
+
+    def test_output_file_is_created(self):
+        GPSSampleRateUpsampler(RECORDING, 2.0).start()
+        assert self.recording_upsample_output(2.0).exists()
+
+    def test_original_file_is_not_modified(self):
+        original_content = RECORDING.read_bytes()
+        GPSSampleRateUpsampler(RECORDING, 2.0).start()
+        assert RECORDING.read_bytes() == original_content
+
+    def test_trackpoint_count_is_increased(self):
+        original_count = count_trackpoints(RECORDING)
+        GPSSampleRateUpsampler(RECORDING, 2.0).start()
+        assert count_trackpoints(self.recording_upsample_output(2.0)) > original_count
+
+    def test_interpolated_timestamps_are_monotonically_increasing(self, tmp_path):
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><trkseg>"
+            '<trkpt lat="47.0" lon="9.0"><ele>400.0</ele><time>2026-01-01T10:00:00Z</time></trkpt>'
+            '<trkpt lat="47.1" lon="9.0"><ele>410.0</ele><time>2026-01-01T10:00:10Z</time></trkpt>'
+            '<trkpt lat="47.2" lon="9.0"><ele>420.0</ele><time>2026-01-01T10:00:20Z</time></trkpt>'
+            "</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "simple.gpx"
+        gpx_file.write_text(gpx)
+
+        GPSSampleRateUpsampler(gpx_file, 1.0).start()
+
+        output = tmp_path / "simple_sample-rate=1.0.gpx"
+        assert output.exists()
+        root = ET.parse(output).getroot()
+        trkpts = list(root.iter(f"{{{GPX_NS}}}trkpt"))
+        # 3 original points at 0, 10, 20 s; target 1/s → 9 inserted per gap → 21 total
+        assert len(trkpts) == 21
+
+        times = []
+        for trkpt in trkpts:
+            time_el = trkpt.find(f"{{{GPX_NS}}}time")
+            assert time_el is not None
+            times.append(datetime.fromisoformat(time_el.text.replace("Z", "+00:00")))
+        for j in range(1, len(times)):
+            assert times[j] > times[j - 1]
+
+    def test_interpolated_positions_are_between_neighbors(self, tmp_path):
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><trkseg>"
+            '<trkpt lat="47.0" lon="9.0"><time>2026-01-01T10:00:00Z</time></trkpt>'
+            '<trkpt lat="47.2" lon="9.0"><time>2026-01-01T10:00:10Z</time></trkpt>'
+            "</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "two_points.gpx"
+        gpx_file.write_text(gpx)
+
+        GPSSampleRateUpsampler(gpx_file, 1.0).start()
+
+        root = ET.parse(tmp_path / "two_points_sample-rate=1.0.gpx").getroot()
+        trkpts = list(root.iter(f"{{{GPX_NS}}}trkpt"))
+        lats = [float(pt.attrib["lat"]) for pt in trkpts]
+        # All inserted lats must be strictly between 47.0 and 47.2
+        for lat in lats[1:-1]:
+            assert 47.0 < lat < 47.2
+
+    def test_time_gaps_do_not_exceed_interval(self, tmp_path):
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><trkseg>"
+            '<trkpt lat="47.0" lon="9.0"><time>2026-01-01T10:00:00Z</time></trkpt>'
+            '<trkpt lat="47.1" lon="9.0"><time>2026-01-01T10:00:07Z</time></trkpt>'
+            "</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "gap7s.gpx"
+        gpx_file.write_text(gpx)
+
+        target_rate = 1.0
+        GPSSampleRateUpsampler(gpx_file, target_rate).start()
+
+        root = ET.parse(tmp_path / "gap7s_sample-rate=1.0.gpx").getroot()
+        trkpts = list(root.iter(f"{{{GPX_NS}}}trkpt"))
+        times = [
+            datetime.fromisoformat(trkpt.find(f"{{{GPX_NS}}}time").text.replace("Z", "+00:00"))
+            for trkpt in trkpts
+        ]
+        interval = 1.0 / target_rate
+        tolerance = 1e-6
+        for j in range(1, len(times)):
+            gap = (times[j] - times[j - 1]).total_seconds()
+            assert gap <= interval + tolerance
+
+
+class TestGPSSampleRateResampler:
+
+    @pytest.fixture(autouse=True)
+    def cleanup_resampled_output(self):
+        """Remove resampled output files before and after each test."""
+        for f in FIXTURES_DIR.glob("1_CAM_20260103124845_0011_D_sample-rate=*.gpx"):
+            f.unlink()
+        for f in FIXTURES_DIR.glob("260322-recording_sample-rate=*.GPX"):
+            f.unlink()
+        yield
+        for f in FIXTURES_DIR.glob("1_CAM_20260103124845_0011_D_sample-rate=*.gpx"):
+            f.unlink()
+        for f in FIXTURES_DIR.glob("260322-recording_sample-rate=*.GPX"):
+            f.unlink()
+
+    def test_output_file_created_on_reduce(self):
+        GPSSampleRateResampler(CAM_RECORDING, 1.0).start()
+        assert (FIXTURES_DIR / "1_CAM_20260103124845_0011_D_sample-rate=1.0.gpx").exists()
+
+    def test_output_file_created_on_upsample(self):
+        GPSSampleRateResampler(RECORDING, 2.0).start()
+        assert (FIXTURES_DIR / "260322-recording_sample-rate=2.0.GPX").exists()
+
+    def test_original_file_is_not_modified(self):
+        original_bytes = CAM_RECORDING.read_bytes()
+        GPSSampleRateResampler(CAM_RECORDING, 1.0).start()
+        assert CAM_RECORDING.read_bytes() == original_bytes
+
+    def test_dense_track_is_reduced(self):
+        original_count = count_trackpoints(CAM_RECORDING)
+        GPSSampleRateResampler(CAM_RECORDING, 1.0).start()
+        output = FIXTURES_DIR / "1_CAM_20260103124845_0011_D_sample-rate=1.0.gpx"
+        assert count_trackpoints(output) < original_count / 10
+
+    def test_sparse_track_is_upsampled(self):
+        original_count = count_trackpoints(RECORDING)
+        GPSSampleRateResampler(RECORDING, 2.0).start()
+        output = FIXTURES_DIR / "260322-recording_sample-rate=2.0.GPX"
+        assert count_trackpoints(output) > original_count
+
+    def test_mixed_gaps_dense_dropped_and_sparse_filled(self, tmp_path):
+        # t=0: anchor; t=0.5s: too dense (same 1s bucket → dropped); t=20s: sparse gap filled
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><trkseg>"
+            '<trkpt lat="47.0" lon="9.0"><time>2026-01-01T10:00:00Z</time></trkpt>'
+            '<trkpt lat="47.01" lon="9.0"><time>2026-01-01T10:00:00.500000Z</time></trkpt>'
+            '<trkpt lat="47.2" lon="9.0"><time>2026-01-01T10:00:20Z</time></trkpt>'
+            "</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "mixed.gpx"
+        gpx_file.write_text(gpx)
+
+        GPSSampleRateResampler(gpx_file, 1.0).start()
+
+        output = tmp_path / "mixed_sample-rate=1.0.gpx"
+        assert output.exists()
+        root = ET.parse(output).getroot()
+        trkpts = list(root.iter(f"{{{GPX_NS}}}trkpt"))
+
+        # 0.5s point dropped; 19 points inserted between t=0 and t=20; t=20 kept → 21 total
+        assert len(trkpts) == 21
+
+        times = [
+            datetime.fromisoformat(pt.find(f"{{{GPX_NS}}}time").text.replace("Z", "+00:00"))
+            for pt in trkpts
+        ]
+        interval = 1.0
+        tolerance = 1e-6
+        for j in range(1, len(times)):
+            assert times[j] - times[j - 1] <= timedelta(seconds=interval + tolerance)
+
+    def test_cli_sample_rate_uses_resampler(self):
+        # Via CLI, --sample-rate above current rate now creates output (was blocked before)
+        result = runner.invoke(app, [
+            "clean", "--recording", str(RECORDING), "--sample-rate", "2",
+        ])
+        assert result.exit_code == 0
+        assert (FIXTURES_DIR / "260322-recording_sample-rate=2.0.GPX").exists()
+
+    def test_upsample_only_does_not_reduce_dense_sections(self, tmp_path):
+        # Dense track: 3 points at 0, 0.5, 20 s; target 1/s with --upsample-only
+        # The 0.5s point must NOT be dropped (dense section preserved)
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><trkseg>"
+            '<trkpt lat="47.0" lon="9.0"><time>2026-01-01T10:00:00Z</time></trkpt>'
+            '<trkpt lat="47.01" lon="9.0"><time>2026-01-01T10:00:00.500000Z</time></trkpt>'
+            '<trkpt lat="47.2" lon="9.0"><time>2026-01-01T10:00:20Z</time></trkpt>'
+            "</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "mixed.gpx"
+        gpx_file.write_text(gpx)
+
+        result = runner.invoke(app, [
+            "clean", "--recording", str(gpx_file),
+            "--sample-rate", "1", "--upsample-only",
+        ])
+        assert result.exit_code == 0
+
+        output = tmp_path / "mixed_sample-rate=1.0.gpx"
+        root = ET.parse(output).getroot()
+        trkpts = list(root.iter(f"{{{GPX_NS}}}trkpt"))
+
+        # 0.5s point kept; 19 points inserted in 20s gap; t=20s kept → 22 total
+        assert len(trkpts) == 22
+
+    def test_upsample_only_without_sample_rate_raises_error(self):
+        result = runner.invoke(app, [
+            "clean", "--recording", str(CAM_RECORDING), "--upsample-only",
+        ])
+        assert result.exit_code != 0
+        assert "--upsample-only" in result.output
+
+    def test_upsample_only_with_distance_raises_error(self):
+        result = runner.invoke(app, [
+            "clean", "--recording", str(CAM_RECORDING),
+            "--sample-rate", "1", "--distance", "1", "--upsample-only",
+        ])
+        assert result.exit_code != 0
+        assert "--distance" in result.output
 
 
 class TestGPSCleanerByIndex:
@@ -512,8 +744,6 @@ class TestGPSRetimer:
         if ZUCCO_RETIMED.exists():
             ZUCCO_RETIMED.unlink()
         yield
-        if ZUCCO_RETIMED.exists():
-            ZUCCO_RETIMED.unlink()
 
     def test_output_file_is_created(self):
         GPSRetimer(ZUCCO_NO_TIMESTAMPS).start()

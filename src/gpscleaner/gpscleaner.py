@@ -485,6 +485,262 @@ class GPSSampleRateReducer:
         print(f"Output written to: {output_path}")
 
 
+class GPSSampleRateUpsampler:
+    """
+    Increases the number of track points in a GPS recording to a target sample rate
+    (positions per second) by inserting linearly interpolated points between existing ones.
+
+    For each consecutive pair of timestamped track points whose time gap exceeds
+    1/target_sample_rate seconds, additional points are inserted so that consecutive
+    kept points are at most 1/target_sample_rate seconds apart.
+
+    Usage:
+        upsampler = GPSSampleRateUpsampler(recording, sample_rate)
+        upsampler.start()
+    """
+
+    def __init__(self, recording: Path, target_sample_rate: float) -> None:
+        """
+        Parameters
+        ----------
+        recording : Path
+            Path to the GPX file whose sample rate should be increased.
+        target_sample_rate : float
+            Target number of positions per second. Must be greater than the current
+            sample rate of the recording.
+        """
+        self._recording = recording
+        self._target_sample_rate = target_sample_rate
+
+    def start(self) -> None:
+        """
+        Run the upsampling:
+        1. Parse the recording GPX.
+        2. For each consecutive pair of timestamped points, compute the time gap.
+        3. Insert interpolated points so consecutive points are at most
+           1/target_sample_rate seconds apart.
+        4. Write the result to a new file next to the original.
+        """
+        ET.register_namespace("", GPX_NAMESPACE)
+
+        recording_tree = ET.parse(self._recording)
+        recording_root = recording_tree.getroot()
+
+        timed_count = sum(
+            1 for trkpt in recording_root.iter(f"{{{GPX_NAMESPACE}}}trkpt")
+            if trkpt.find(f"{{{GPX_NAMESPACE}}}time") is not None
+        )
+        if timed_count < 2:
+            print("Not enough track points with timestamps to upsample.")
+            return
+
+        interval = 1.0 / self._target_sample_rate
+        total_inserted = 0
+
+        for trkseg in recording_root.iter(f"{{{GPX_NAMESPACE}}}trkseg"):
+            old_trkpts = [c for c in trkseg if c.tag == f"{{{GPX_NAMESPACE}}}trkpt"]
+            new_trkpts: list[ET.Element] = []
+
+            for j, trkpt in enumerate(old_trkpts):
+                new_trkpts.append(trkpt)
+                if j + 1 >= len(old_trkpts):
+                    continue
+
+                a = trkpt
+                b = old_trkpts[j + 1]
+                time_a_el = a.find(f"{{{GPX_NAMESPACE}}}time")
+                time_b_el = b.find(f"{{{GPX_NAMESPACE}}}time")
+                if time_a_el is None or time_b_el is None:
+                    continue
+
+                t_a = datetime.fromisoformat(time_a_el.text.replace("Z", "+00:00"))
+                t_b = datetime.fromisoformat(time_b_el.text.replace("Z", "+00:00"))
+                time_gap = (t_b - t_a).total_seconds()
+                n_new = max(0, math.ceil(time_gap / interval) - 1)
+                if n_new == 0:
+                    continue
+
+                a_lat = float(a.attrib["lat"])
+                a_lon = float(a.attrib["lon"])
+                b_lat = float(b.attrib["lat"])
+                b_lon = float(b.attrib["lon"])
+                a_ele_el = a.find(f"{{{GPX_NAMESPACE}}}ele")
+                b_ele_el = b.find(f"{{{GPX_NAMESPACE}}}ele")
+                has_ele = a_ele_el is not None and b_ele_el is not None
+
+                for k in range(1, n_new + 1):
+                    fraction = k * interval / time_gap
+
+                    new_trkpt = ET.Element(f"{{{GPX_NAMESPACE}}}trkpt")
+                    new_trkpt.attrib["lat"] = f"{a_lat + fraction * (b_lat - a_lat):.15f}"
+                    new_trkpt.attrib["lon"] = f"{a_lon + fraction * (b_lon - a_lon):.15f}"
+
+                    if has_ele:
+                        a_ele = float(a_ele_el.text)
+                        b_ele = float(b_ele_el.text)
+                        ele_el = ET.SubElement(new_trkpt, f"{{{GPX_NAMESPACE}}}ele")
+                        ele_el.text = f"{a_ele + fraction * (b_ele - a_ele):.6f}"
+
+                    new_time = t_a + k * timedelta(seconds=interval)
+                    time_el = ET.SubElement(new_trkpt, f"{{{GPX_NAMESPACE}}}time")
+                    time_el.text = new_time.isoformat().replace("+00:00", "Z")
+
+                    new_trkpts.append(new_trkpt)
+                    total_inserted += 1
+
+            for trkpt in old_trkpts:
+                trkseg.remove(trkpt)
+            for trkpt in new_trkpts:
+                trkseg.append(trkpt)
+
+        output_path = self._recording.parent / (
+            self._recording.stem + f"_sample-rate={self._target_sample_rate}" + self._recording.suffix
+        )
+        recording_tree.write(output_path, xml_declaration=True, encoding="utf-8")
+
+        print(f"Done. {timed_count} track points upsampled to {timed_count + total_inserted}.")
+        print(f"Output written to: {output_path}")
+
+
+class GPSSampleRateResampler:
+    """
+    Resamples a GPS recording to a target sample rate (positions per second) by
+    combining reduction and interpolation in a single pass per track segment.
+
+    For each track point that falls within the same time bucket as the previously
+    kept point, the point is dropped (reduction). After selecting the kept points,
+    any gap between consecutive kept points that is larger than 1/target_sample_rate
+    seconds is filled with linearly interpolated points (upsampling).
+
+    This correctly handles recordings from navigation devices that use adaptive
+    sampling (dense near turns, sparse on straight sections): dense sections are
+    thinned and sparse sections are filled in the same pass — without relying on
+    an average sample rate to pick a single direction.
+
+    Usage:
+        resampler = GPSSampleRateResampler(recording, sample_rate)
+        resampler.start()
+    """
+
+    def __init__(self, recording: Path, target_sample_rate: float) -> None:
+        """
+        Parameters
+        ----------
+        recording : Path
+            Path to the GPX file to resample.
+        target_sample_rate : float
+            Target number of positions per second.
+        """
+        self._recording = recording
+        self._target_sample_rate = target_sample_rate
+
+    def start(self) -> None:
+        """
+        Run the combined resample pass:
+        1. Parse the recording GPX.
+        2. Find the first timestamped point as the bucket origin.
+        3. For each segment, drop points in already-covered buckets and fill
+           gaps larger than 1/target_sample_rate with interpolated points.
+        4. Write the result to a new file next to the original.
+        """
+        ET.register_namespace("", GPX_NAMESPACE)
+
+        recording_tree = ET.parse(self._recording)
+        recording_root = recording_tree.getroot()
+
+        origin: datetime | None = None
+        for trkpt in recording_root.iter(f"{{{GPX_NAMESPACE}}}trkpt"):
+            time_el = trkpt.find(f"{{{GPX_NAMESPACE}}}time")
+            if time_el is not None and time_el.text is not None:
+                origin = datetime.fromisoformat(time_el.text.replace("Z", "+00:00"))
+                break
+
+        if origin is None:
+            print("No track points with timestamps found.")
+            return
+
+        interval = 1.0 / self._target_sample_rate
+        total_timed = 0
+        total_removed = 0
+        total_inserted = 0
+
+        for trkseg in recording_root.iter(f"{{{GPX_NAMESPACE}}}trkseg"):
+            old_trkpts = [c for c in trkseg if c.tag == f"{{{GPX_NAMESPACE}}}trkpt"]
+            new_trkpts: list[ET.Element] = []
+            last_kept: tuple[ET.Element, datetime] | None = None
+            last_bucket = -1
+
+            for trkpt in old_trkpts:
+                time_el = trkpt.find(f"{{{GPX_NAMESPACE}}}time")
+                if time_el is None or time_el.text is None:
+                    new_trkpts.append(trkpt)
+                    continue
+
+                total_timed += 1
+                point_time = datetime.fromisoformat(time_el.text.replace("Z", "+00:00"))
+                bucket = int((point_time - origin).total_seconds() / interval)
+
+                if bucket <= last_bucket:
+                    total_removed += 1
+                    continue
+
+                # Gap-filling: insert interpolated points if the gap to the previous
+                # kept point is larger than the target interval
+                if last_kept is not None:
+                    gap = (point_time - last_kept[1]).total_seconds()
+                    n_insert = max(0, math.ceil(gap / interval) - 1)
+                    if n_insert > 0:
+                        a = last_kept[0]
+                        b = trkpt
+                        a_lat = float(a.attrib["lat"])
+                        a_lon = float(a.attrib["lon"])
+                        b_lat = float(b.attrib["lat"])
+                        b_lon = float(b.attrib["lon"])
+                        a_ele_el = a.find(f"{{{GPX_NAMESPACE}}}ele")
+                        b_ele_el = b.find(f"{{{GPX_NAMESPACE}}}ele")
+                        has_ele = a_ele_el is not None and b_ele_el is not None
+
+                        for k in range(1, n_insert + 1):
+                            fraction = k * interval / gap
+                            new_pt = ET.Element(f"{{{GPX_NAMESPACE}}}trkpt")
+                            new_pt.attrib["lat"] = f"{a_lat + fraction * (b_lat - a_lat):.15f}"
+                            new_pt.attrib["lon"] = f"{a_lon + fraction * (b_lon - a_lon):.15f}"
+
+                            if has_ele:
+                                a_ele = float(a_ele_el.text)
+                                b_ele = float(b_ele_el.text)
+                                ele_el = ET.SubElement(new_pt, f"{{{GPX_NAMESPACE}}}ele")
+                                ele_el.text = f"{a_ele + fraction * (b_ele - a_ele):.6f}"
+
+                            new_time = last_kept[1] + k * timedelta(seconds=interval)
+                            new_time_el = ET.SubElement(new_pt, f"{{{GPX_NAMESPACE}}}time")
+                            new_time_el.text = new_time.isoformat().replace("+00:00", "Z")
+
+                            new_trkpts.append(new_pt)
+                            total_inserted += 1
+
+                new_trkpts.append(trkpt)
+                last_kept = (trkpt, point_time)
+                last_bucket = bucket
+
+            for trkpt in old_trkpts:
+                trkseg.remove(trkpt)
+            for trkpt in new_trkpts:
+                trkseg.append(trkpt)
+
+        output_path = self._recording.parent / (
+            self._recording.stem + f"_sample-rate={self._target_sample_rate}" + self._recording.suffix
+        )
+        recording_tree.write(output_path, xml_declaration=True, encoding="utf-8")
+
+        total_out = total_timed - total_removed + total_inserted
+        print(
+            f"Done. {total_timed} track points resampled to {total_out} "
+            f"({total_removed} removed, {total_inserted} inserted)."
+        )
+        print(f"Output written to: {output_path}")
+
+
 class GPSRetimer:
     """
     Assigns timestamps to track points that have none, based on their distance

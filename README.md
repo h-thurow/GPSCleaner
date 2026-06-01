@@ -1,6 +1,6 @@
 # GPSCleaner
 
-Corrects GPS recordings where track points deviate from the actual route during a given time window. The affected points are replaced by positions evenly distributed along the actual route. The original file is left unchanged; the result is written to a new file. Also, you can reduce sample rate and point density by distance, and compare two tracks to measure deviations over time.
+Corrects GPS recordings where track points deviate from the actual route during a given time window. The affected points are replaced by positions evenly distributed along the actual route. The original file is left unchanged; the result is written to a new file. Also, you can change the sample rate (reduce or increase by interpolation) and point density by distance, and compare two tracks to measure deviations over time.
 
 ## Example
 
@@ -168,27 +168,41 @@ Coordinates must match a track point in `--recording` exactly. In JOSM's "Advanc
 
 `--start-coord`/`--end-coord` cannot be combined with `--start`/`--end` or `--start-point`/`--end-point`.
 
-#### Reduce sample rate
+#### Change sample rate
 
-Some GPS devices (e.g. dashcams) record at a very high sample rate. Use `--sample-rate` to reduce the number of positions per second:
+Use `--sample-rate` to resample a recording to a target number of positions per second. Both operations are applied in a single pass per track segment:
+
+- **Dense sections** (consecutive points closer than 1/RATE seconds) — excess points are dropped.
+- **Sparse sections** (gap between consecutive points larger than 1/RATE seconds) — new points are inserted by linear interpolation of position and timestamp.
+
+This correctly handles recordings from navigation devices that use adaptive sampling (dense near turns, sparse on straight roads): each section is treated individually rather than comparing a global average rate against the target.
 
 ```
-python -m gpscleaner clean --recording FILE --sample-rate RATE [--plot]
+python -m gpscleaner clean --recording FILE --sample-rate RATE [--upsample-only] [--plot]
 ```
 
-| Option          | Description |
-|-----------------|-------------|
-| `--recording`   | GPX file to be reduced |
-| `--sample-rate` | Target number of positions per second (decimals allowed, e.g. `0.2` for one position every 5 seconds) |
-| `--plot`        | Also save a PNG visualisation of the tracks (optional) |
+| Option            | Description |
+|-------------------|-------------|
+| `--recording`     | GPX file to be resampled |
+| `--sample-rate`   | Target number of positions per second (decimals allowed, e.g. `0.2` for one position every 5 seconds) |
+| `--upsample-only` | Only insert points in sparse gaps; never remove points from dense sections (optional) |
+| `--plot`          | Also save a PNG visualisation of the tracks (optional) |
 
 ```bash
+# Reduce a 25 fps dashcam recording to 1 position/second
 python -m gpscleaner clean --recording /path/to/recording.gpx --sample-rate 1
+
+# Upsample a sparse hiking track to 1 position/second
+python -m gpscleaner clean --recording /path/to/recording.gpx --sample-rate 1
+
+# Fill gaps in an adaptive-sampling track for photo geotagging (every 2 s),
+# without removing the dense sections near turns
+python -m gpscleaner clean --recording /path/to/track.gpx --sample-rate 0.5 --upsample-only
 ```
 
-If the recording's current sample rate is already at or below the target, a message is printed and no output file is created.
+The default mode produces a track where consecutive points are at most 1/RATE seconds apart. With `--upsample-only`, dense sections are preserved as-is (useful when their higher precision is intentional, e.g. for geotagging photos from a navigation track). The summary message reports how many points were removed and inserted.
 
-`--sample-rate` cannot be combined with `--start`, `--end`, or `--reference`.
+`--sample-rate` cannot be combined with `--start`, `--end`, or `--reference`. `--upsample-only` requires `--sample-rate`.
 
 #### Reduce point density by distance
 
@@ -222,44 +236,6 @@ recording.gpx  →  recording_cleaned.gpx              (track correction)
                →  recording_sample-rate=1.0.gpx       (--sample-rate 1)
                →  recording_distance=3.0.gpx          (--distance 3)
 ```
-
-### compare — Measure deviations between two tracks
-
-Compares two GPS tracks by matching points with similar timestamps and printing their distances:
-
-```
-python -m gpscleaner compare --recording FILE --reference FILE --max-time-diff SECONDS [--interval SECONDS]
-```
-
-| Option            | Description |
-|-------------------|-------------|
-| `--recording`     | GPX recording to compare against the reference |
-| `--reference`     | Reference GPS track (drives the comparison) |
-| `--max-time-diff` | Maximum time difference in seconds between matched points (interpreted as ±) |
-| `--interval`      | Check every this many seconds (optional; all reference points are compared if omitted) |
-
-```bash
-python -m gpscleaner compare \
-  --recording /path/to/recording.gpx \
-  --reference /path/to/reference.gpx \
-  --max-time-diff 2
-
-python -m gpscleaner compare \
-  --recording /path/to/recording.gpx \
-  --reference /path/to/reference.gpx \
-  --max-time-diff 2 --interval 60
-```
-
-Output is a table printed to the terminal (redirectable with `>`):
-
-```
-Timestamp (Reference)             Distance (m)   Timestamp (Original)
-2026-03-22T15:06:08+00:00                 3.41   2026-03-22T15:06:08+00:00
-2026-03-22T15:07:08+00:00                12.87   2026-03-22T15:07:09+00:00
-2026-03-22T15:08:08+00:00
-```
-
-A row with no match within `--max-time-diff` has empty distance and timestamp columns.
 
 ### retime — Assign timestamps to points without one
 
@@ -305,6 +281,44 @@ recording.gpx  →  recording_retimed.gpx
 `--overwrite` is useful when `retime` needs to be applied to multiple sections of
 the same file in succession: run the command once per section, each time overwriting
 the result of the previous run.
+
+### compare — Measure deviations between two tracks
+
+Compares two GPS tracks by matching points with similar timestamps and printing their distances:
+
+```
+python -m gpscleaner compare --recording FILE --reference FILE --max-time-diff SECONDS [--interval SECONDS]
+```
+
+| Option            | Description |
+|-------------------|-------------|
+| `--recording`     | GPX recording to compare against the reference |
+| `--reference`     | Reference GPS track (drives the comparison) |
+| `--max-time-diff` | Maximum time difference in seconds between matched points (interpreted as ±) |
+| `--interval`      | Check every this many seconds (optional; all reference points are compared if omitted) |
+
+```bash
+python -m gpscleaner compare \
+  --recording /path/to/recording.gpx \
+  --reference /path/to/reference.gpx \
+  --max-time-diff 2
+
+python -m gpscleaner compare \
+  --recording /path/to/recording.gpx \
+  --reference /path/to/reference.gpx \
+  --max-time-diff 2 --interval 60
+```
+
+Output is a table printed to the terminal (redirectable with `>`):
+
+```
+Timestamp (Reference)             Distance (m)   Timestamp (Original)
+2026-03-22T15:06:08+00:00                 3.41   2026-03-22T15:06:08+00:00
+2026-03-22T15:07:08+00:00                12.87   2026-03-22T15:07:09+00:00
+2026-03-22T15:08:08+00:00
+```
+
+A row with no match within `--max-time-diff` has empty distance and timestamp columns.
 
 ## Plot
 
