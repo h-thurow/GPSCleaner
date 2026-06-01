@@ -90,7 +90,7 @@ Alternatively, without activating the environment:
 
 GPSCleaner provides three subcommands: `clean`, `compare` and `retime`.
 
-### clean — Correct or reduce a track
+### clean — Correct or resample a track
 
 #### By timestamp
 
