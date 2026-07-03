@@ -90,6 +90,12 @@ Alternatively, without activating the environment:
 
 GPSCleaner provides three subcommands: `clean`, `retime` and `compare`.
 
+### Track name in output files
+
+If the input file's `<trk>` has a `<name>`, every output file written by `clean` or `retime` gets the same suffix appended to `<trk><name>` as to the output filename (e.g. `_cleaned`, `_distance=3.0`, `_sample-rate=1.0`, `_retimed`, `_shifted`). This makes the result easy to tell apart from the original when both are shown by name — e.g. in Garmin BaseCamp, which displays the `<name>` value rather than the file path.
+
+If the input file has no `<name>`, none is added. If the file contains more than one `<trk>`, all names are left unchanged. Files written with `--overwrite` keep their original name, since no new, distinguishable file is created.
+
 ### clean — Correct or resample a track
 
 #### By timestamp

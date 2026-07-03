@@ -6,7 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from src.gpscleaner.cli import app
-from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSRetimer, GPSSampleRateReducer, GPSSampleRateResampler, GPSSampleRateUpsampler, GPSTimeShifter, _get_timestamp_by_coord, _get_timestamp_by_index, _haversine_distance, _interpolate_positions, compare_tracks
+from src.gpscleaner.gpscleaner import GPSCleaner, GPSDistanceReducer, GPSRetimer, GPSSampleRateReducer, GPSSampleRateResampler, GPSSampleRateUpsampler, GPSTimeShifter, _append_track_name_suffix, _get_timestamp_by_coord, _get_timestamp_by_index, _haversine_distance, _interpolate_positions, compare_tracks
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -1087,6 +1087,230 @@ class TestGPSTimeShifter:
             "retime", "--recording", str(gpx_file), "--shift-time", "+",
         ])
         assert result.exit_code != 0
+
+
+class TestTrackNameSuffix:
+    """
+    Tests for _append_track_name_suffix, which every writer class calls right
+    before writing its output file so that <trk><name> is distinguishable
+    from the original recording's name (e.g. in Garmin Basecamp, which
+    displays the <name> value rather than the file path).
+    """
+
+    def _make_gpx(self, tmp_path, name: str | None, trk_count: int = 1) -> Path:
+        trk = (
+            f"<trk><name>{name}</name><trkseg>" if name is not None else "<trk><trkseg>"
+        ) + '<trkpt lat="47.0" lon="9.0"><time>2026-01-01T10:00:00Z</time></trkpt>' + "</trkseg></trk>"
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            + trk * trk_count
+            + "</gpx>"
+        )
+        gpx_file = tmp_path / "test.gpx"
+        gpx_file.write_text(gpx)
+        return gpx_file
+
+    def test_append_helper_appends_suffix_to_existing_name(self, tmp_path):
+        gpx_file = self._make_gpx(tmp_path, name="Original Track")
+        root = ET.parse(gpx_file).getroot()
+        _append_track_name_suffix(root, "_cleaned")
+        name_el = root.find(f"{{{GPX_NS}}}trk/{{{GPX_NS}}}name")
+        assert name_el.text == "Original Track_cleaned"
+
+    def test_append_helper_does_nothing_when_no_name(self, tmp_path):
+        gpx_file = self._make_gpx(tmp_path, name=None)
+        root = ET.parse(gpx_file).getroot()
+        _append_track_name_suffix(root, "_cleaned")
+        name_el = root.find(f"{{{GPX_NS}}}trk/{{{GPX_NS}}}name")
+        assert name_el is None
+
+    def test_append_helper_leaves_names_unchanged_with_multiple_tracks(self, tmp_path):
+        gpx_file = self._make_gpx(tmp_path, name="Track", trk_count=2)
+        root = ET.parse(gpx_file).getroot()
+        _append_track_name_suffix(root, "_cleaned")
+        names = [el.text for el in root.iter(f"{{{GPX_NS}}}name")]
+        assert names == ["Track", "Track"]
+
+    def test_name_stays_first_child_of_trk(self, tmp_path):
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><name>Original Track</name><type>hiking</type><trkseg>"
+            '<trkpt lat="47.0" lon="9.0"><time>2026-01-01T10:00:00Z</time></trkpt>'
+            "</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "test.gpx"
+        gpx_file.write_text(gpx)
+
+        GPSTimeShifter(gpx_file, timedelta(minutes=5)).start()
+
+        root = ET.parse(tmp_path / "test_shifted.gpx").getroot()
+        trk = root.find(f"{{{GPX_NS}}}trk")
+        tags = [child.tag for child in trk]
+        assert tags[0] == f"{{{GPX_NS}}}name"
+        assert trk.find(f"{{{GPX_NS}}}name").text == "Original Track_shifted"
+
+    def test_cleaner_appends_suffix(self, tmp_path):
+        recording_gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><name>Original Track</name><trkseg>"
+            '<trkpt lat="47.000000" lon="9.000000"><time>2026-01-01T10:00:00Z</time></trkpt>'
+            '<trkpt lat="47.000100" lon="9.000000"><time>2026-01-01T10:00:05Z</time></trkpt>'
+            "</trkseg></trk></gpx>"
+        )
+        target_gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><trkseg>"
+            '<trkpt lat="48.000000" lon="10.000000"/>'
+            '<trkpt lat="48.000100" lon="10.000000"/>'
+            "</trkseg></trk></gpx>"
+        )
+        recording_file = tmp_path / "recording.gpx"
+        recording_file.write_text(recording_gpx)
+        target_file = tmp_path / "target.gpx"
+        target_file.write_text(target_gpx)
+
+        GPSCleaner(
+            datetime(2026, 1, 1, 9, tzinfo=timezone.utc),
+            datetime(2026, 1, 1, 11, tzinfo=timezone.utc),
+            recording_file,
+            target_file,
+        ).start()
+
+        root = ET.parse(tmp_path / "recording_cleaned.gpx").getroot()
+        name_el = root.find(f"{{{GPX_NS}}}trk/{{{GPX_NS}}}name")
+        assert name_el.text == "Original Track_cleaned"
+
+    def test_distance_reducer_appends_suffix(self, tmp_path):
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><name>Original Track</name><trkseg>"
+            '<trkpt lat="47.000000" lon="9.000000"/>'
+            '<trkpt lat="47.000005" lon="9.000000"/>'
+            '<trkpt lat="47.000010" lon="9.000000"/>'
+            "</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "test.gpx"
+        gpx_file.write_text(gpx)
+
+        GPSDistanceReducer(gpx_file, 3.0).start()
+
+        root = ET.parse(tmp_path / "test_distance=3.0.gpx").getroot()
+        name_el = root.find(f"{{{GPX_NS}}}trk/{{{GPX_NS}}}name")
+        assert name_el.text == "Original Track_distance=3.0"
+
+    def test_sample_rate_reducer_appends_suffix(self, tmp_path):
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><name>Original Track</name><trkseg>"
+            '<trkpt lat="47.0" lon="9.0"><time>2026-01-01T10:00:00Z</time></trkpt>'
+            '<trkpt lat="47.0" lon="9.0"><time>2026-01-01T10:00:01Z</time></trkpt>'
+            '<trkpt lat="47.0" lon="9.0"><time>2026-01-01T10:00:02Z</time></trkpt>'
+            '<trkpt lat="47.0" lon="9.0"><time>2026-01-01T10:00:03Z</time></trkpt>'
+            "</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "test.gpx"
+        gpx_file.write_text(gpx)
+
+        GPSSampleRateReducer(gpx_file, 0.2).start()
+
+        root = ET.parse(tmp_path / "test_sample-rate=0.2.gpx").getroot()
+        name_el = root.find(f"{{{GPX_NS}}}trk/{{{GPX_NS}}}name")
+        assert name_el.text == "Original Track_sample-rate=0.2"
+
+    def test_sample_rate_upsampler_appends_suffix(self, tmp_path):
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><name>Original Track</name><trkseg>"
+            '<trkpt lat="47.0" lon="9.0"><time>2026-01-01T10:00:00Z</time></trkpt>'
+            '<trkpt lat="47.1" lon="9.0"><time>2026-01-01T10:00:10Z</time></trkpt>'
+            "</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "test.gpx"
+        gpx_file.write_text(gpx)
+
+        GPSSampleRateUpsampler(gpx_file, 1.0).start()
+
+        root = ET.parse(tmp_path / "test_sample-rate=1.0.gpx").getroot()
+        name_el = root.find(f"{{{GPX_NS}}}trk/{{{GPX_NS}}}name")
+        assert name_el.text == "Original Track_sample-rate=1.0"
+
+    def test_sample_rate_resampler_appends_suffix(self, tmp_path):
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><name>Original Track</name><trkseg>"
+            '<trkpt lat="47.0" lon="9.0"><time>2026-01-01T10:00:00Z</time></trkpt>'
+            '<trkpt lat="47.01" lon="9.0"><time>2026-01-01T10:00:00.500000Z</time></trkpt>'
+            '<trkpt lat="47.2" lon="9.0"><time>2026-01-01T10:00:20Z</time></trkpt>'
+            "</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "test.gpx"
+        gpx_file.write_text(gpx)
+
+        GPSSampleRateResampler(gpx_file, 1.0).start()
+
+        root = ET.parse(tmp_path / "test_sample-rate=1.0.gpx").getroot()
+        name_el = root.find(f"{{{GPX_NS}}}trk/{{{GPX_NS}}}name")
+        assert name_el.text == "Original Track_sample-rate=1.0"
+
+    def test_retimer_appends_suffix(self, tmp_path):
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><name>Original Track</name><trkseg>"
+            '<trkpt lat="47.0" lon="9.0"><time>2026-01-01T10:00:00Z</time></trkpt>'
+            '<trkpt lat="47.05" lon="9.0"/>'
+            '<trkpt lat="47.1" lon="9.0"><time>2026-01-01T10:01:00Z</time></trkpt>'
+            "</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "test.gpx"
+        gpx_file.write_text(gpx)
+
+        GPSRetimer(gpx_file).start()
+
+        root = ET.parse(tmp_path / "test_retimed.gpx").getroot()
+        name_el = root.find(f"{{{GPX_NS}}}trk/{{{GPX_NS}}}name")
+        assert name_el.text == "Original Track_retimed"
+
+    def test_retimer_overwrite_does_not_append_suffix(self, tmp_path):
+        gpx = (
+            "<?xml version='1.0' encoding='utf-8'?>"
+            '<gpx xmlns="http://www.topografix.com/GPX/1/1">'
+            "<trk><name>Original Track</name><trkseg>"
+            '<trkpt lat="47.0" lon="9.0"><time>2026-01-01T10:00:00Z</time></trkpt>'
+            '<trkpt lat="47.05" lon="9.0"/>'
+            '<trkpt lat="47.1" lon="9.0"><time>2026-01-01T10:01:00Z</time></trkpt>'
+            "</trkseg></trk></gpx>"
+        )
+        gpx_file = tmp_path / "test.gpx"
+        gpx_file.write_text(gpx)
+
+        GPSRetimer(gpx_file, overwrite=True).start()
+
+        root = ET.parse(gpx_file).getroot()
+        name_el = root.find(f"{{{GPX_NS}}}trk/{{{GPX_NS}}}name")
+        assert name_el.text == "Original Track"
+
+    def test_time_shifter_appends_suffix(self, tmp_path):
+        gpx_file = self._make_gpx(tmp_path, name="Original Track")
+        GPSTimeShifter(gpx_file, timedelta(minutes=5)).start()
+        root = ET.parse(tmp_path / "test_shifted.gpx").getroot()
+        name_el = root.find(f"{{{GPX_NS}}}trk/{{{GPX_NS}}}name")
+        assert name_el.text == "Original Track_shifted"
+
+    def test_time_shifter_overwrite_does_not_append_suffix(self, tmp_path):
+        gpx_file = self._make_gpx(tmp_path, name="Original Track")
+        GPSTimeShifter(gpx_file, timedelta(minutes=5), overwrite=True).start()
+        root = ET.parse(gpx_file).getroot()
+        name_el = root.find(f"{{{GPX_NS}}}trk/{{{GPX_NS}}}name")
+        assert name_el.text == "Original Track"
 
 
 class TestInterpolatePositions:

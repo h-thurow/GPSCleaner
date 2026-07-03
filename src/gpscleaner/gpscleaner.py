@@ -165,6 +165,28 @@ def _get_timestamp_by_coord(recording: Path, lat: float, lon: float) -> datetime
     return matches[0]
 
 
+def _append_track_name_suffix(root: ET.Element, suffix: str) -> None:
+    """
+    Append `suffix` to the text of the recording's <trk><name>, so that the
+    written file is distinguishable by name from the original recording (e.g.
+    when both are shown in Garmin Basecamp, which displays the <name> value
+    rather than the file path).
+
+    If the <trk> has no <name>, none is added. If the file contains more than
+    one <trk>, all names are left unchanged since it would then be unclear
+    which one identifies the recording as a whole.
+    """
+    all_trks = list(root.iter(f"{{{GPX_NAMESPACE}}}trk"))
+    if len(all_trks) != 1:
+        return
+
+    name_element = all_trks[0].find(f"{{{GPX_NAMESPACE}}}name")
+    if name_element is None or name_element.text is None:
+        return
+
+    name_element.text += suffix
+
+
 class GPSCleaner:
     """
     Replaces GPS track points in a recording that fall within a given time
@@ -261,6 +283,7 @@ class GPSCleaner:
         output_path = self._recording.parent / (
             self._recording.stem + "_cleaned" + self._recording.suffix
         )
+        _append_track_name_suffix(recording_root, "_cleaned")
         recording_tree.write(output_path, xml_declaration=True, encoding="utf-8")
 
         print(f"Done. {len(affected_elements)} track points replaced.")
@@ -333,6 +356,7 @@ class GPSDistanceReducer:
         output_path = self._recording.parent / (
             self._recording.stem + f"_distance={self._min_distance}" + self._recording.suffix
         )
+        _append_track_name_suffix(recording_root, f"_distance={self._min_distance}")
         recording_tree.write(output_path, xml_declaration=True, encoding="utf-8")
 
         print(f"Done. {len(all_trkpts)} track points reduced to {len(kept)}.")
@@ -479,6 +503,7 @@ class GPSSampleRateReducer:
         output_path = self._recording.parent / (
             self._recording.stem + f"_sample-rate={self._target_sample_rate}" + self._recording.suffix
         )
+        _append_track_name_suffix(recording_root, f"_sample-rate={self._target_sample_rate}")
         recording_tree.write(output_path, xml_declaration=True, encoding="utf-8")
 
         print(f"Done. {len(all_trkpts)} track points reduced to {len(kept_trkpts)}.")
@@ -596,6 +621,7 @@ class GPSSampleRateUpsampler:
         output_path = self._recording.parent / (
             self._recording.stem + f"_sample-rate={self._target_sample_rate}" + self._recording.suffix
         )
+        _append_track_name_suffix(recording_root, f"_sample-rate={self._target_sample_rate}")
         recording_tree.write(output_path, xml_declaration=True, encoding="utf-8")
 
         print(f"Done. {timed_count} track points upsampled to {timed_count + total_inserted}.")
@@ -731,6 +757,7 @@ class GPSSampleRateResampler:
         output_path = self._recording.parent / (
             self._recording.stem + f"_sample-rate={self._target_sample_rate}" + self._recording.suffix
         )
+        _append_track_name_suffix(recording_root, f"_sample-rate={self._target_sample_rate}")
         recording_tree.write(output_path, xml_declaration=True, encoding="utf-8")
 
         total_out = total_timed - total_removed + total_inserted
@@ -944,6 +971,7 @@ class GPSRetimer:
             output_path = self._recording.parent / (
                 self._recording.stem + "_retimed" + self._recording.suffix
             )
+            _append_track_name_suffix(root, "_retimed")
 
         tree.write(output_path, xml_declaration=True, encoding="utf-8")
 
@@ -1072,6 +1100,7 @@ class GPSTimeShifter:
             output_path = self._recording.parent / (
                 self._recording.stem + "_shifted" + self._recording.suffix
             )
+            _append_track_name_suffix(root, "_shifted")
 
         tree.write(output_path, xml_declaration=True, encoding="utf-8")
 
